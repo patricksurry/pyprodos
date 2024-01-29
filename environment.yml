@@ -1,0 +1,12 @@
+name: prodos
+dependencies:
+  - pip
+  - python=3
+  - pip:
+    - typer[all]
+    - bitstring
+    - pytest
+    - flake8
+    - flake8-black
+    - mypy
+
