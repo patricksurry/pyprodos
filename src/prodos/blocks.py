@@ -1,13 +1,13 @@
-from typing import ClassVar, List, Self, Optional, Type, TypeVar
+from typing import ClassVar, List, Self, Optional
 from dataclasses import dataclass
 import struct
 from bitarray import bitarray
+import logging
 
 from .globals import entry_length, entries_per_block, block_size
-from .metadata import FileEntry, DirectoryHeaderEntry
-
-
-HeaderT = TypeVar('HeaderT', bound=DirectoryHeaderEntry)
+from .metadata import FileEntry, DirectoryHeaderEntry, \
+    NamedEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry, \
+    storage_type_subdir, storage_type_voldir
 
 
 @dataclass(kw_only=True)
@@ -30,17 +30,15 @@ class DataBlock:
 class DirectoryBlock(AbstractBlock):
     _struct: str = "<HH"
     _size: ClassVar = 4
+    _header_factory: ClassVar = {
+        storage_type_voldir: VolumeDirectoryHeaderEntry,
+        storage_type_subdir: SubdirectoryHeaderEntry
+    }
 
     prev_pointer: int
     next_pointer: int
     header_entry: Optional[DirectoryHeaderEntry] = None
     file_entries: List[FileEntry]
-
-    def __post_init__(self):
-        self.file_entries = [
-            d if isinstance(d, FileEntry) else FileEntry(**d)
-            for d in self.file_entries
-        ]
 
     def __repr__(self):
         s = f"<{self.prev_pointer:d}:{self.next_pointer:d}>\n"
@@ -61,28 +59,25 @@ class DirectoryBlock(AbstractBlock):
 
     @classmethod
     def unpack(kls, buf: bytes) -> Self:
-        return kls._unpack(buf)
-
-    @classmethod
-    def unpack_key_block(kls, buf: bytes, header_factory: Type[HeaderT]) -> Self:
-        return kls._unpack(buf, header_factory)
-
-    @classmethod
-    def _unpack(kls, buf: bytes, header_factory: Optional[Type[HeaderT]]=None) -> Self:
         offset = kls._size
         (
             prev_pointer, next_pointer
         ) = struct.unpack(kls._struct, buf[:offset])
-        header: Optional[HeaderT] = None
+        # check the start of the first entry to see if it's a header entry
+        d = NamedEntry.unpack(buf[offset:offset+NamedEntry._size])
+        header: Optional[DirectoryHeaderEntry] = None
+        header_factory = kls._header_factory.get(d.storage_type)
         if header_factory:
             header = header_factory.unpack(buf[offset:offset + entry_length])
             offset += entry_length
 
-        file_entries = []
-        for k in range(entries_per_block - (1 if header else 0)):
+        file_entries: List[FileEntry] = []
+        while len(file_entries) + (1 if header else 0) < entries_per_block:
             file_entries.append(FileEntry.unpack(buf[offset:offset + entry_length]))
             offset += entry_length
 
+        if any(buf[offset:]):
+            logging.warn("DirectoryBlock: non-zero bytes in padding")
         return kls(
             prev_pointer=prev_pointer,
             next_pointer=next_pointer,

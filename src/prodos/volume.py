@@ -14,29 +14,12 @@ from .file import SimpleFile
 class Volume:
     def __init__(self, device: BlockDevice):
         self.device = device
-        data = self.device.read_block(volume_key_block)
-        vkb = DirectoryBlock.unpack_key_block(data, VolumeDirectoryHeaderEntry)
+        vkb = self.device.read_block_type(volume_key_block, DirectoryBlock, unsafe=True)
         assert isinstance(vkb.header_entry, VolumeDirectoryHeaderEntry)
         vh = vkb.header_entry
-        self.volume_name = vh.file_name
         assert vh.total_blocks == device.total_blocks, \
             f"Volume directory header block count {vh.total_blocks} != device block count {device.total_blocks}"
         self.device.reset_free_map(vh.bit_map_pointer)
-        self.root_entry = FileEntry(
-            storage_type = storage_type_voldir,
-            file_name = '/',
-            file_type = 0xff,
-            key_pointer = volume_key_block,
-            blocks_used = volume_directory_length,
-            eof = volume_directory_length * block_size,
-            date_time = vh.date_time,
-            version = 1,
-            min_version = 1,
-            access = 0,
-            aux_type = 0,
-            last_mod = vh.date_time,
-            header_pointer = 0,
-        )
 
     @classmethod
     def from_file(kls, file_name: str, mode: Literal['ro', 'rw']='ro') -> Self:
@@ -69,7 +52,7 @@ class Volume:
                 total_blocks = total_blocks,
             ),
             entries=[FileEntry.empty] * (4 * entries_per_block - 1),
-            block_list=[2,3,4,5]
+            block_list=list(range(volume_key_block, volume_key_block + volume_directory_length))
         ).write(device)
         device.write_free_map()
         volume = kls(device)
@@ -78,7 +61,12 @@ class Volume:
         return volume
 
     def __repr__(self):
-        return f"Volume {self.volume_name} {self.root_entry.date_time}\n" + repr(self.device)
+        h = self.root.header
+        return f"Volume {h.file_name} {h.date_time}\n" + repr(self.device)
+
+    @property
+    def root(self) -> Directory:
+        return self.read_directory(FileEntry.root)
 
     def read_directory(self, entry: FileEntry) -> Directory:
         return Directory.read(self.device, entry)
@@ -96,11 +84,11 @@ class Volume:
     def glob_paths(self, paths: List[str]) -> List[FileEntry]:
         entries = []
         uniq = {p.strip('/') for p in paths}
-        root_dir = Directory.read(self.device, self.root_entry)
+        root = self.root
         for p in uniq:
             if not p:
-                entries.append(self.root_entry)
+                entries.append(FileEntry.root)
             else:
-                entries += root_dir.path_glob(self.device, p.split('/'))
+                entries += root.path_glob(self.device, p.split('/'))
         return entries
 

@@ -1,4 +1,4 @@
-from typing import List, Type
+from typing import List, Optional
 from dataclasses import dataclass, field
 import logging
 from fnmatch import fnmatch
@@ -78,19 +78,15 @@ class Directory:
         entries: List[FileEntry] = []
         prev = 0
         mark = device.mark_session()
+        header: Optional[DirectoryHeaderEntry] = None
         while True:
             data = device.read_block(block_index)
-            if prev:
-                db = DirectoryBlock.unpack(data)
-            else:
-                ht: Type[DirectoryHeaderEntry]
-                if entry.is_volume_dir:
-                    ht = VolumeDirectoryHeaderEntry
-                else:
-                    ht = SubdirectoryHeaderEntry
-                db = DirectoryBlock.unpack_key_block(data, ht)
-                assert db.header_entry
+            db = DirectoryBlock.unpack(data)
+            if prev == 0:
+                assert db.header_entry, "Expected DirectoryHeaderEntry in key block"
                 header = db.header_entry
+            else:
+                assert not db.header_entry, "Unexpected DirectoryHeaderEntry after key block"
 
             if db.prev_pointer != prev:
                 logging.warn(f"directory block {block_index} has prev_pointer {db.prev_pointer} expected {prev}")
@@ -100,6 +96,7 @@ class Directory:
             prev = block_index
             block_index = db.next_pointer
 
+        assert header
         return kls(header=header, entries=entries, block_list=device.get_access_log('r', mark))
 
 

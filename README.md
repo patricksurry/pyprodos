@@ -1,13 +1,18 @@
 package name py-prodos
 
+todo:
+
+- careful writing changed directories if block count shrinks
+
+boot test:  export from prodos image, import to new image w/ bootloader, does it boot in emu?
+
+- verbose option to show access log
+        print(volume.device.dump_access_log())
+
 chkdsk:
-- check read_block() from free
-- track read/write _read/write_log set()
-- check prev pointers during directory read
-- check DirectoryBlock tail is empty
-- warn on unknown file types
-- check storage_type of header entries ($f for vol, $e for sub)
-- check file count = active count (blocks_used)
+- recurse all files and directories
+- check read activity matches used count
+- check file blocks used matches visited
 
 prodos image from emulator
 

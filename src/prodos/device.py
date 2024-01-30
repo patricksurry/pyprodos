@@ -87,10 +87,17 @@ class BlockDevice:
     def get_access_log(self, access_types: str, mark=0):
         return [i for (t, i) in self._access_log[mark:] if t in access_types]
 
-    def read_block_type(self, block_index: int, factory: Type[BlockT]) -> BlockT:
-        return factory.unpack(self.read_block(block_index))
+    def dump_access_log(self):
+        return '\n'.join(
+            ' '.join(t + f"{idx:<4x}".upper() for (t, idx) in self._access_log[k:k+12])
+             for k in range(0, len(self._access_log), 12)
+        )
 
-    def read_block(self, block_index: int) -> bytes:
+    def read_block_type(self, block_index: int, factory: Type[BlockT], unsafe=False) -> BlockT:
+        return factory.unpack(self.read_block(block_index, unsafe))
+
+    def read_block(self, block_index: int, unsafe=False) -> bytes:
+        assert unsafe or not self.free_map[block_index]
         self._access_log.append(('r', block_index))
         start = block_index * block_size + self.skip
         return self.mm[start:start+block_size]
@@ -117,7 +124,7 @@ class BlockDevice:
         k = block_size_bits + 3
         n = len(self.free_map) >> k
         for i in range(n):
-            b = self.read_block_type(i + block_index, BitmapBlock)
+            b = self.read_block_type(i + block_index, BitmapBlock, unsafe=True)
             self.free_map[i<<k : (i+1)<<k] = b.free_map
         logging.debug(f"Read {n} bitmask blocks with {len(self.free_map)} bits covering {self.total_blocks} volume blocks")
         assert self.total_blocks <= len(self.free_map) < self.total_blocks + (block_size << 3)

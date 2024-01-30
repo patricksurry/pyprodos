@@ -1,8 +1,10 @@
 from typing import ClassVar, Dict, Self, Final, Protocol
 from dataclasses import dataclass, fields
 import struct
+import logging
 
-from .globals import access_flags, entry_length, entries_per_block
+from .globals import access_flags, entry_length, entries_per_block, \
+    volume_key_block, volume_directory_length
 from .p8datetime import P8DateTime
 
 
@@ -157,6 +159,7 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
     def unpack(kls, buf: bytes) -> Self:
         n = DirectoryHeaderEntry._size
         d = DirectoryHeaderEntry.unpack(buf[:n])
+        assert d.storage_type == storage_type_voldir
         (
             bit_map_pointer,
             total_blocks
@@ -192,6 +195,7 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
     def unpack(kls, buf: bytes) -> Self:
         n = DirectoryHeaderEntry._size
         d = DirectoryHeaderEntry.unpack(buf[:n])
+        assert d.storage_type == storage_type_subdir
         (
             parent_pointer,
             parent_entry_number,
@@ -204,12 +208,12 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
             **shallow_dict(d)
         )
 
-
 @dataclass(kw_only=True)
 class FileEntry(NamedEntry):
     _struct: ClassVar = "<BHHHB4sBBBH4sH"
     _size: ClassVar = NamedEntry._size + 23
     empty: ClassVar['FileEntry']
+    root: ClassVar['FileEntry']
 
     file_type: int
     key_pointer: int
@@ -267,6 +271,10 @@ class FileEntry(NamedEntry):
     def unpack(kls, buf: bytes) -> Self:
         n = NamedEntry._size
         d = NamedEntry.unpack(buf[:n])
+
+        if d.storage_type not in {storage_type_empty, storage_type_dir} | simple_file_types:
+            logging.warn(f"FileEntry: unexpected storage type {d.storage_type:x}")
+
         (
             file_type,
             key_pointer,
@@ -281,6 +289,7 @@ class FileEntry(NamedEntry):
             mt,
             header_pointer,
         ) = struct.unpack(kls._struct, buf[n:])
+
         return kls(
             file_type=file_type,
             key_pointer=key_pointer,
@@ -296,12 +305,30 @@ class FileEntry(NamedEntry):
             **shallow_dict(d)
         )
 
+# empty file entry to fill unused slots
 FileEntry.empty = FileEntry(
-    storage_type = 0,
+    storage_type = storage_type_empty,
     file_name = '',
     file_type = 0,
     key_pointer = 0,
     blocks_used = 0,
+    eof = 0,
+    date_time = P8DateTime.empty,
+    version = 0,
+    min_version = 0,
+    access = 0,
+    aux_type = 0,
+    last_mod = P8DateTime.empty,
+    header_pointer = 0,
+)
+
+# dummy record to indicate root directory
+FileEntry.root = FileEntry(
+    storage_type = storage_type_voldir,
+    file_name = '/',
+    file_type = 0xff,
+    key_pointer = volume_key_block,
+    blocks_used = volume_directory_length,
     eof = 0,
     date_time = P8DateTime.empty,
     version = 0,
