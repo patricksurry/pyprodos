@@ -1,28 +1,49 @@
-from typing import ClassVar, Self
-from dataclasses import dataclass, asdict
+from typing import ClassVar, Dict, Self, Final, Protocol
+from dataclasses import dataclass, fields
 import struct
 
 from .globals import access_flags, entry_length, entries_per_block
+from .p8datetime import P8DateTime
 
 
-directory_types = {0xD, 0xE, 0xF}
-simple_file_types = {1, 2, 3}
+storage_type_empty: Final = 0x0
+
+storage_type_dir: Final = 0xD
+storage_type_subdir: Final = 0xE
+storage_type_voldir: Final = 0xF
+
+storage_type_seedling: Final = 0x1
+storage_type_sapling: Final = 0x2
+storage_type_tree: Final = 0x3
+
+directory_types = {
+    storage_type_dir,
+    storage_type_subdir,
+    storage_type_voldir,
+}
+
+simple_file_types = {
+    storage_type_seedling,
+    storage_type_sapling,
+    storage_type_tree,
+}
 
 
 def format_access(flags: int) -> str:
     s = ''
-    for f, c in access_flags.items():
+    for c, f in access_flags.items():
         s += c if flags & f else '-'
     return s
 
 
-def format_date_time(buf: bytes):
-    y = buf[1] >> 1
-    m = (buf[0] >> 5) + ((buf[1] & 1) << 3)
-    d = buf[0] & 0b11111
-    hr = buf[3]
-    mi = buf[2]
-    return f"{y:03d}-{m:02d}-{d:02d}T{hr:02d}:{mi:02d}"
+class IsDataclass(Protocol):
+    # verify whether obj is a dataclass
+    __dataclass_fields__: ClassVar[Dict]
+
+
+def shallow_dict(d: IsDataclass):
+    """create a shallow dict for a dataclass, since asdict() breaks nested objs"""
+    return {field.name: getattr(d, field.name) for field in fields(d)}
 
 
 @dataclass(kw_only=True)
@@ -35,14 +56,18 @@ class NamedEntry:
     storage_type: int       # 0=unused, 1=seedling, 2=sapling, 3=tree, D=subdir, E=subdir header, F=vol header
     file_name: str
 
+    def pack(self) -> bytes:
+        type_len = (self.storage_type << 4) | len(self.file_name)
+        return struct.pack(NamedEntry._struct, type_len, self.file_name.encode('ascii'))
+
     @classmethod
     def unpack(kls, buf: bytes) -> Self:
         (
             type_len,
             name,
         ) = struct.unpack(kls._struct, buf)
-        storage_type = (type_len >> 4) & 0xf
-        name = name[:type_len & 0xf]
+        storage_type = (type_len >> 4) & 0b1111
+        name = name[:type_len & 0b1111]
         file_name = name.decode('ascii', errors='ignore')
         return kls(
             storage_type=storage_type,
@@ -56,7 +81,7 @@ class DirectoryHeaderEntry(NamedEntry):
     _size: ClassVar = NamedEntry._size + 19
 
     reserved: bytes
-    date_time: bytes
+    date_time: P8DateTime
     version: int
     min_version: int
     access: int
@@ -65,14 +90,26 @@ class DirectoryHeaderEntry(NamedEntry):
     file_count: int
 
     def __repr__(self):
-        create = format_date_time(self.date_time)
         flags = format_access(self.access)
         typ = f"{self.storage_type:x}".upper()
-        return f"    {self.file_count:d} files in {self.file_name} {typ} {flags} {create}"
+        return f"    {self.file_count:d} files in {self.file_name} {typ} {flags} {self.date_time}"
 
     def __post_init___(self):
         assert self.entry_length == entry_length
         assert self.entries_per_block == entries_per_block
+
+    def pack(self) -> bytes:
+        return super().pack() + struct.pack(
+            DirectoryHeaderEntry._struct,
+            self.reserved,
+            self.date_time.pack(),
+            self.version,
+            self.min_version,
+            self.access,
+            self.entry_length,
+            self.entries_per_block,
+            self.file_count,
+        )
 
     @classmethod
     def unpack(kls, buf: bytes) -> Self:
@@ -80,7 +117,7 @@ class DirectoryHeaderEntry(NamedEntry):
         d = NamedEntry.unpack(buf[:n])
         (
             reserved,
-            date_time,
+            dt,
             version,
             min_version,
             access,
@@ -90,14 +127,14 @@ class DirectoryHeaderEntry(NamedEntry):
         ) = struct.unpack(kls._struct, buf[n:])
         return kls(
             reserved=reserved,
-            date_time=date_time,
+            date_time=P8DateTime.unpack(dt),
             version=version,
             min_version=min_version,
             access=access,
             entry_length=entry_length,
             entries_per_block=entries_per_block,
             file_count=file_count,
-            **asdict(d)
+            **shallow_dict(d)
         )
 
 
@@ -108,6 +145,13 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
 
     bit_map_pointer: int
     total_blocks: int
+
+    def pack(self) -> bytes:
+        return super().pack() + struct.pack(
+            VolumeDirectoryHeaderEntry._struct,
+            self.bit_map_pointer,
+            self.total_blocks,
+        )
 
     @classmethod
     def unpack(kls, buf: bytes) -> Self:
@@ -120,7 +164,7 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
         return kls(
             bit_map_pointer=bit_map_pointer,
             total_blocks=total_blocks,
-            **asdict(d)
+            **shallow_dict(d)
         )
 
 
@@ -136,6 +180,14 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
     def __post_init___(self):
         assert self.parent_entry_length == entry_length
 
+    def pack(self) -> bytes:
+        return super().pack() + struct.pack(
+            SubdirectoryHeaderEntry._struct,
+            self.parent_pointer,
+            self.parent_entry_number,
+            self.parent_entry_length,
+        )
+
     @classmethod
     def unpack(kls, buf: bytes) -> Self:
         n = DirectoryHeaderEntry._size
@@ -149,7 +201,7 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
             parent_pointer=parent_pointer,
             parent_entry_number=parent_entry_number,
             parent_entry_length=parent_entry_length,
-            **asdict(d)
+            **shallow_dict(d)
         )
 
 
@@ -157,18 +209,19 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
 class FileEntry(NamedEntry):
     _struct: ClassVar = "<BHHHB4sBBBH4sH"
     _size: ClassVar = NamedEntry._size + 23
+    empty: ClassVar['FileEntry']
 
     file_type: int
     key_pointer: int
     blocks_used: int
     eof: int
-    date_time: bytes
+    date_time: P8DateTime
     version: int
     min_version: int
     access: int
     aux_type: int
-    last_mod: bytes
-    header_pointer: int
+    last_mod: P8DateTime
+    header_pointer: int     # key block of directory owning this entry
 
     def __repr__(self):
         typ = f"{self.storage_type:1x}/{self.file_type:02x}".upper()
@@ -176,13 +229,15 @@ class FileEntry(NamedEntry):
         name = self.file_name
         if self.is_dir:
             name += '/'
-        create = format_date_time(self.date_time)
-        mod = format_date_time(self.last_mod)
-        return f"{name:18s} {self.eof:>8d} {typ} {flags} {create} {mod} {self.blocks_used:d} @ {self.key_pointer}"
+        return f"{name:18s} {self.eof:>8d} {typ} {flags} {self.date_time} {self.last_mod} {self.blocks_used:d} @ {self.key_pointer}"
 
     @property
     def is_dir(self) -> bool:
         return self.storage_type in directory_types
+
+    @property
+    def is_volume_dir(self) -> bool:
+        return self.storage_type == storage_type_voldir
 
     @property
     def is_simple_file(self) -> bool:
@@ -191,6 +246,22 @@ class FileEntry(NamedEntry):
     @property
     def is_active(self) -> bool:
         return self.storage_type != 0
+
+    def pack(self) -> bytes:
+        return super().pack() + struct.pack(FileEntry._struct,
+            self.file_type,
+            self.key_pointer,
+            self.blocks_used,
+            self.eof >> 16,
+            self.eof & 0xffff,
+            self.date_time.pack(),
+            self.version,
+            self.min_version,
+            self.access,
+            self.aux_type,
+            self.last_mod.pack(),
+            self.header_pointer,
+        )
 
     @classmethod
     def unpack(kls, buf: bytes) -> Self:
@@ -202,12 +273,12 @@ class FileEntry(NamedEntry):
             blocks_used,
             eofw,
             eof3,
-            date_time,
+            dt,
             version,
             min_version,
             access,
             aux_type,
-            last_mod,
+            mt,
             header_pointer,
         ) = struct.unpack(kls._struct, buf[n:])
         return kls(
@@ -215,16 +286,31 @@ class FileEntry(NamedEntry):
             key_pointer=key_pointer,
             blocks_used=blocks_used,
             eof=eofw | (eof3 << 16),
-            date_time=date_time,
+            date_time=P8DateTime.unpack(dt),
             version=version,
             min_version=min_version,
             access=access,
             aux_type=aux_type,
-            last_mod=last_mod,
+            last_mod=P8DateTime.unpack(mt),
             header_pointer=header_pointer,
-            **asdict(d)
+            **shallow_dict(d)
         )
 
+FileEntry.empty = FileEntry(
+    storage_type = 0,
+    file_name = '',
+    file_type = 0,
+    key_pointer = 0,
+    blocks_used = 0,
+    eof = 0,
+    date_time = P8DateTime.empty,
+    version = 0,
+    min_version = 0,
+    access = 0,
+    aux_type = 0,
+    last_mod = P8DateTime.empty,
+    header_pointer = 0,
+)
 
 assert VolumeDirectoryHeaderEntry._size == entry_length
 assert SubdirectoryHeaderEntry._size == entry_length

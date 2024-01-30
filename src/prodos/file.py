@@ -1,6 +1,6 @@
-from typing import Optional, List, Self
+from typing import List, Self
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .globals import block_size_bits
 from .metadata import FileEntry
@@ -11,7 +11,7 @@ from .device import BlockDevice
 @dataclass(kw_only=True)
 class SimpleFile:
     data: bytes
-    block_list: Optional[List[int]]=None
+    block_list: List[int] = field(default_factory=list)
 
     def export(self, dst: str):
         open(dst, 'wb').write(self.data)

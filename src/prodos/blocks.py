@@ -1,10 +1,13 @@
-from typing import ClassVar, List, Optional, Self
-from dataclasses import dataclass, asdict
+from typing import ClassVar, List, Self, Optional, Type, TypeVar
+from dataclasses import dataclass
 import struct
-from bitstring import BitArray
+from bitarray import bitarray
 
-from .globals import entry_length, entries_per_block
-from .metadata import FileEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry
+from .globals import entry_length, entries_per_block, block_size
+from .metadata import FileEntry, DirectoryHeaderEntry
+
+
+HeaderT = TypeVar('HeaderT', bound=DirectoryHeaderEntry)
 
 
 @dataclass(kw_only=True)
@@ -20,7 +23,7 @@ class DataBlock:
 
     @classmethod
     def unpack(kls, buf) -> Self:
-        return DataBlock(data=buf)
+        return kls(data=buf)
 
 
 @dataclass(kw_only=True)
@@ -30,6 +33,7 @@ class DirectoryBlock(AbstractBlock):
 
     prev_pointer: int
     next_pointer: int
+    header_entry: Optional[DirectoryHeaderEntry] = None
     file_entries: List[FileEntry]
 
     def __post_init__(self):
@@ -39,53 +43,52 @@ class DirectoryBlock(AbstractBlock):
         ]
 
     def __repr__(self):
-        return f"<{self.prev_pointer:d}:{self.next_pointer:d}>\n" + (
-            "\n".join(repr(f) for f in self.file_entries)
-        )
+        s = f"<{self.prev_pointer:d}:{self.next_pointer:d}>\n"
+        if self.header_entry:
+            s += f"{self.header_entry}\n"
+        s += "\n".join(repr(f) for f in self.file_entries)
+        return s
+
+    def pack(self) -> bytes:
+        data = struct.pack(DirectoryBlock._struct, self.prev_pointer, self.next_pointer)
+        if self.header_entry:
+            data += self.header_entry.pack()
+        data += b''.join(e.pack() for e in self.file_entries)
+        # each directory block has one unused byte since 4 + 13 * 39 = 511
+        padding = block_size - 4 - entries_per_block * entry_length
+        assert padding + len(data) == block_size, f"{padding} + {len(data)} != {block_size}"
+        return data + bytes(padding)
 
     @classmethod
-    def unpack(kls, buf, skip=0) -> Self:
+    def unpack(kls, buf: bytes) -> Self:
+        return kls._unpack(buf)
+
+    @classmethod
+    def unpack_key_block(kls, buf: bytes, header_factory: Type[HeaderT]) -> Self:
+        return kls._unpack(buf, header_factory)
+
+    @classmethod
+    def _unpack(kls, buf: bytes, header_factory: Optional[Type[HeaderT]]=None) -> Self:
+        offset = kls._size
         (
             prev_pointer, next_pointer
-        ) = struct.unpack(kls._struct, buf[:kls._size])
+        ) = struct.unpack(kls._struct, buf[:offset])
+        header: Optional[HeaderT] = None
+        if header_factory:
+            header = header_factory.unpack(buf[offset:offset + entry_length])
+            offset += entry_length
+
         file_entries = []
-        for k in range(skip, entries_per_block):
-            off = kls._size + k * entry_length
-            file_entries.append(FileEntry.unpack(buf[off:off+entry_length]))
+        for k in range(entries_per_block - (1 if header else 0)):
+            file_entries.append(FileEntry.unpack(buf[offset:offset + entry_length]))
+            offset += entry_length
+
         return kls(
             prev_pointer=prev_pointer,
             next_pointer=next_pointer,
+            header_entry=header,
             file_entries=file_entries,
         )
-
-
-@dataclass(kw_only=True)
-class VolumeDirectoryKeyBlock(DirectoryBlock):
-    volume_header: VolumeDirectoryHeaderEntry
-
-    def __repr__(self):
-        return repr(self.volume_header) + "\n" + super().__repr__()
-
-    @classmethod
-    def unpack(kls, buf) -> Self:
-        v = DirectoryBlock.unpack(buf, skip=1)
-        off = DirectoryBlock._size
-        n = VolumeDirectoryHeaderEntry._size
-        volume_header = VolumeDirectoryHeaderEntry.unpack(buf[off:off+n])
-        return kls(volume_header=volume_header, **asdict(v))
-
-
-@dataclass(kw_only=True)
-class SubdirectoryKeyBlock(DirectoryBlock):
-    subdirectory_header: SubdirectoryHeaderEntry
-
-    @classmethod
-    def unpack(kls, buf) -> Self:
-        v = DirectoryBlock.unpack(buf, skip=1)
-        off = DirectoryBlock._size
-        n = SubdirectoryHeaderEntry._size
-        subdirectory_header = SubdirectoryHeaderEntry.unpack(buf[off:off+n])
-        return kls(subdirectory_header=subdirectory_header, **asdict(v))
 
 
 @dataclass(kw_only=True)
@@ -98,7 +101,7 @@ class IndexBlock(AbstractBlock):
 
     @classmethod
     def unpack(kls, buf) -> Self:
-        return IndexBlock(block_pointers=[
+        return kls(block_pointers=[
             lo + (hi<<8) for (lo, hi) in zip(buf[:256], buf[256:])
         ])
 
@@ -112,8 +115,13 @@ class BitmapBlock(AbstractBlock):
     the last bitmap block for a 32Mb volume (with 65535 blocks) is represents a block
     just past the end of the volume.
     """
-    free_map: BitArray
+    free_map: bitarray
+
+    def pack(self) -> bytes:
+        return self.free_map.tobytes()
 
     @classmethod
     def unpack(kls, buf) -> Self:
-        return BitmapBlock(free_map=BitArray(buf))
+        bits = bitarray()
+        bits.frombytes(buf)
+        return kls(free_map=bits)

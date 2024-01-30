@@ -7,7 +7,7 @@ chkdsk:
 - check DirectoryBlock tail is empty
 - warn on unknown file types
 - check storage_type of header entries ($f for vol, $e for sub)
-- check file count = active count
+- check file count = active count (blocks_used)
 
 prodos image from emulator
 

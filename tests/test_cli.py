@@ -46,3 +46,22 @@ def test_export_to_dir():
     assert path.exists(out)
     unlink(out)
 
+
+def test_create():
+    target = 'images/newvol.2mg'
+    if path.exists(target):
+        unlink(target)
+    result = runner.invoke(app, [
+        target, "create",
+        "--name", "floppy",
+        "--size", 140,
+        "--format", "2mg"
+    ])
+    assert result.exit_code == 0
+    assert path.exists(target)
+    assert path.getsize(target) == 140*512+64
+    result = runner.invoke(app, [target, "info"])
+    assert result.exit_code == 0
+    assert "FLOPPY" in result.stdout
+    assert f"{140 - 2 - 4 - 1} free" in result.stdout
+    unlink(target)

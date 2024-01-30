@@ -4,6 +4,8 @@ import logging
 import typer
 from os import path
 from prodos.volume import Volume
+from prodos.device import DeviceFormat
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -11,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 @dataclass
 class State:
     volume_filename: str = ''
-    mode: Literal['readonly', 'update'] = 'readonly'
+    mode: Literal['ro', 'rw'] = 'ro'
 
 
 app = typer.Typer()
@@ -19,16 +21,21 @@ state = State()
 
 
 @app.command()
-def create(blocks: Annotated[int, typer.Option("--blocks", "-n")] = 65535):
+def create(
+        size: int = 65535,
+        name: str = 'PYP8',
+        format: DeviceFormat = DeviceFormat.prodos,
+        loader: str = ''):
     """
     Create an empty volume with BLOCKS total blocks (512 bytes/block)
     """
-    if path.exists(state.volume_filename):
-        print(f"Volume file {state.volume_filename} already exists!")
-        raise typer.Exit(1)
-
-    print("TODO: create")
-    # create and write an empty volume
+    Volume.create(
+        file_name=state.volume_filename,
+        volume_name=name,
+        total_blocks=size,
+        format=format,
+        loader_file_name=loader
+    )
 
 
 @app.command()
@@ -52,13 +59,13 @@ def default_path(paths: Optional[List[str]]) -> List[str]:
 
 
 @app.command()
-def ls(paths: Annotated[List[str], typer.Argument(callback=default_path)] = None):
+def ls(paths: Annotated[Optional[List[str]], typer.Argument(callback=default_path)] = None):
     """
     Show volume listing for path like `/some/directory/some/file`
 
     Paths are case-insensitive, forward-slash separated (/) and start with a slash.
     """
-
+    assert paths is not None
     volume = Volume.from_file(state.volume_filename)
     entries = volume.glob_paths(paths)
 
@@ -151,7 +158,7 @@ def shared(
     Simple prodos volume management from python
     """
     state.volume_filename = volume_filename
-    state.mode = 'write' if update else 'readonly'
+    state.mode = 'rw' if update else 'ro'
 
 
 if __name__ == "__main__":

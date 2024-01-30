@@ -1,11 +1,11 @@
-from typing import List, Optional, Set
-from dataclasses import dataclass
+from typing import List, Type
+from dataclasses import dataclass, field
 import logging
 from fnmatch import fnmatch
 
-from .globals import volume_key_block
-from .metadata import FileEntry, DirectoryHeaderEntry
-from .blocks import DirectoryBlock, VolumeDirectoryKeyBlock, SubdirectoryKeyBlock
+from .globals import entries_per_block
+from .metadata import FileEntry, DirectoryHeaderEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry
+from .blocks import DirectoryBlock
 from .device import BlockDevice
 
 
@@ -13,7 +13,7 @@ from .device import BlockDevice
 class Directory:
     header: DirectoryHeaderEntry
     entries: List[FileEntry]
-    block_log: Set[int]
+    block_list: List[int] = field(default_factory=list)
 
     def __repr__(self):
         s = '\n'.join([repr(e) for e in self.entries if e.is_active])
@@ -46,27 +46,51 @@ class Directory:
             []
         )
 
+    def write(self, device: BlockDevice):
+        assert (len(self.entries) + 1) % entries_per_block == 0, \
+            f"Directory: header plus {len(self.entries)} entries isn't a multiple of {entries_per_block}"
+        n = (len(self.entries) + 1) // entries_per_block
+        while len(self.block_list) < n:
+            self.block_list.append(device.allocate_block())
+
+        offset = entries_per_block-1
+        key = DirectoryBlock(
+            prev_pointer=0, next_pointer=self.block_list[1],
+            header_entry=self.header,
+            file_entries=self.entries[:offset]
+        )
+        device.write_block(self.block_list[0], key.pack())
+        for i in range(1, n):
+            blk = DirectoryBlock(
+                prev_pointer=self.block_list[i-1],
+                next_pointer=self.block_list[i+1] if i+1 < n else 0,
+                file_entries=self.entries[offset:offset + entries_per_block]
+            )
+            offset += entries_per_block
+            device.write_block(self.block_list[i], blk.pack())
+        assert offset == len(self.entries)
+
     @classmethod
     def read(kls, device: BlockDevice, entry: FileEntry):
         assert entry.is_dir, f"read_directory: not a directory {entry}"
         block_index = entry.key_pointer
 
-        block_log: Set[int] = set()
         entries: List[FileEntry] = []
         prev = 0
+        mark = device.mark_session()
         while True:
+            data = device.read_block(block_index)
             if prev:
-                typ = DirectoryBlock
+                db = DirectoryBlock.unpack(data)
             else:
-                typ = VolumeDirectoryKeyBlock if not entry else SubdirectoryKeyBlock
-            db = device.read_block_type(block_index, typ)
-
-            block_log.add(block_index)
-            if not prev:
-                if typ is VolumeDirectoryKeyBlock:
-                    header = db.volume_header
+                ht: Type[DirectoryHeaderEntry]
+                if entry.is_volume_dir:
+                    ht = VolumeDirectoryHeaderEntry
                 else:
-                    header = db.subdirectory_header
+                    ht = SubdirectoryHeaderEntry
+                db = DirectoryBlock.unpack_key_block(data, ht)
+                assert db.header_entry
+                header = db.header_entry
 
             if db.prev_pointer != prev:
                 logging.warn(f"directory block {block_index} has prev_pointer {db.prev_pointer} expected {prev}")
@@ -76,6 +100,6 @@ class Directory:
             prev = block_index
             block_index = db.next_pointer
 
-        return kls(header=header, entries=entries, block_log=block_log)
+        return kls(header=header, entries=entries, block_list=device.get_access_log('r', mark))
 
 
