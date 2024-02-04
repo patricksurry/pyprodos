@@ -2,18 +2,18 @@ from typing import Literal, Optional, List, Annotated
 from dataclasses import dataclass
 import logging
 import typer
+import shutil
 from os import path
 from prodos.volume import Volume
 from prodos.device import DeviceFormat
+from prodos.file import SimpleFile
 
-
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARN)
 
 
 @dataclass
 class State:
     volume_filename: str = ''
-    mode: Literal['ro', 'rw'] = 'ro'
 
 
 app = typer.Typer()
@@ -49,7 +49,7 @@ def info():
 @app.command()
 def check():
     """
-    Perform various volume integrity checks
+    TODO Perform various volume integrity checks
     """
     print("TODO: check")
 
@@ -65,7 +65,8 @@ def ls(paths: Annotated[Optional[List[str]], typer.Argument(callback=default_pat
 
     Paths are case-insensitive, forward-slash separated (/) and start with a slash.
     """
-    assert paths is not None
+    assert paths is not None, "ls: No paths"
+
     volume = Volume.from_file(state.volume_filename)
     entries = volume.glob_paths(paths)
 
@@ -84,18 +85,18 @@ def ls(paths: Annotated[Optional[List[str]], typer.Argument(callback=default_pat
 @app.command()
 def cp(src: List[str], dst: str):
     """
-    Copy SOURCE to DEST, or multiple SOURCE(s) to DIRECTORY
-
-    TODO: glob rules and DST dir or target
+    TODO Copy SOURCE to DEST, or multiple SOURCE(s) to DIRECTORY
     """
+
+    #TODO: glob rules and DST dir or target
+
     print("TODO: cp")
 
 
 @app.command()
 def mv(src: List[str], dst: str):
     """
-    Move from SRC to DST
-    TODO: glob rules and DST dir or target
+    TODO Move from SRC to DST
     """
     print("TODO: mv")
 
@@ -105,30 +106,88 @@ def rm(src: List[str]):
     """
     Remove simple file(s) at SRC
     """
-    print("TODO: rm")
+    volume = Volume.from_file(state.volume_filename, mode='rw')
+
+    entries = volume.glob_paths(src)
+    if not entries:
+        print("No matching files found")
+        raise typer.Exit(1)
+
+    for e in entries:
+        if not e.is_simple_file:
+            print(f"Not a simple file: {e.file_name}")
+            raise typer.Exit(1)
+
+    for e in entries:
+        dir = volume.parent_directory(e)
+        dir.remove_simple_file(e)
 
 
 @app.command()
 def rmdir(src: List[str]):
     """
-    Remove empty directory at SRC
+    TODO Remove empty directory at SRC
     """
     print("TODO: rmdir")
 
 
 @app.command('import')
-def host_import(src: List[str], dst: str):
+def host_import(src: List[str]):
     """
     Import host files at SRC to DST
+
+    Copy SRC to DEST, or multiple SRC(s) to DIRECTORY
+
+    Note SRC globbing happens in the host shell so nothing is expanded here
     """
-    print("TODO: import")
+    volume = Volume.from_file(state.volume_filename, mode='rw')
+
+    dst = src[0] if len(src) == 1 else src.pop()
+    base, target_name = dst, ''
+
+    entries = volume.glob_paths([base])
+    if len(entries) == 0:
+        # e.g. import foo /somewhere/bar
+        (base, target_name) = path.split(dst)
+        entries = volume.glob_paths([base])
+
+    if len(entries) != 1:
+        if len(entries) == 0:
+            print(f"Destination {dst} not found")
+        elif len(entries) > 1:
+            print(f"Destination {dst} matched multiple files!")
+        raise typer.Exit(1)
+
+    target = entries[0]
+    if not target.is_dir:
+        # existing target
+        if len(entries) > 1:
+            print("Destination for multiple files must be a directory")
+            raise typer.Exit(1)
+        dir = volume.parent_directory(target)
+        dir.remove_simple_file(target)
+    else:
+        if target_name and len(entries) > 1:
+            print("Destination for multiple files must be a directory")
+            raise typer.Exit(1)
+        dir = volume.read_directory(target)
+
+    for fname in src:
+        f = SimpleFile(
+            device=volume.device,
+            file_name=target_name or fname,
+            data=open(fname, 'rb').read()
+        )
+        print('writing simple file')
+        dir.write_simple_file(f)
 
 
 @app.command('export')
-def host_export(src: List[str], dst: str):
+def host_export(src: List[str]):
     """
-    Export SOURCE to host DEST, or multiple SOURCE(s) to host DIRECTORY
+    Export SRC to host DST, or SRC(s) to host DIRECTORY
     """
+    dst = src[0] if len(src) == 1 else src.pop()
     volume = Volume.from_file(state.volume_filename)
 
     entries = volume.glob_paths(src)
@@ -148,17 +207,16 @@ def host_export(src: List[str], dst: str):
 
 
 @app.callback()
-def shared(
-        volume_filename: str,
-        update: Annotated[bool, typer.Option("--update", "-u")] = False,
-    ):
+def shared(volume_filename: str, source: str=''):
     """
     prodos-pyfs CLI
 
     Simple prodos volume management from python
     """
+    if source:
+        shutil.copy(source, volume_filename)
+
     state.volume_filename = volume_filename
-    state.mode = 'rw' if update else 'ro'
 
 
 if __name__ == "__main__":

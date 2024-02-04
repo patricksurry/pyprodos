@@ -12,18 +12,12 @@ from .metadata import FileEntry, DirectoryHeaderEntry, \
 
 @dataclass(kw_only=True)
 class AbstractBlock:
+    def pack(self) -> bytes:
+        return NotImplemented
+
     @classmethod
     def unpack(kls, buf) -> Self:
         return NotImplemented
-
-
-@dataclass(kw_only=True)
-class DataBlock:
-    data: bytes
-
-    @classmethod
-    def unpack(kls, buf) -> Self:
-        return kls(data=buf)
 
 
 @dataclass(kw_only=True)
@@ -54,7 +48,8 @@ class DirectoryBlock(AbstractBlock):
         data += b''.join(e.pack() for e in self.file_entries)
         # each directory block has one unused byte since 4 + 13 * 39 = 511
         padding = block_size - 4 - entries_per_block * entry_length
-        assert padding + len(data) == block_size, f"{padding} + {len(data)} != {block_size}"
+        assert padding + len(data) == block_size, \
+            f"DirectoryBlock.pack: bad padding {padding} + {len(data)} != {block_size}"
         return data + bytes(padding)
 
     @classmethod
@@ -93,6 +88,13 @@ class IndexBlock(AbstractBlock):
     in bytes 0-255 and the msbs in bytes 256-511
     """
     block_pointers: List[int]
+
+    def pack(self) -> bytes:
+        return bytes(
+            [p & 0xff for p in self.block_pointers]
+            + [p >> 8 for p in self.block_pointers]
+            + [0]*(block_size - (len(self.block_pointers) << 1))
+        )
 
     @classmethod
     def unpack(kls, buf) -> Self:

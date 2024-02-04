@@ -2,7 +2,14 @@ package name py-prodos
 
 todo:
 
-- careful writing changed directories if block count shrinks
+- something wrong with import X Y  when Y already exists?
+
+- import-blocks
+- export-blocks
+- could add a repl mode https://github.com/tiangolo/typer/issues/185
+- *todo* writing changed directories if block count shrinks
+- chmod/chtype
+
 
 boot test:  export from prodos image, import to new image w/ bootloader, does it boot in emu?
 
@@ -10,6 +17,8 @@ boot test:  export from prodos image, import to new image w/ bootloader, does it
         print(volume.device.dump_access_log())
 
 chkdsk:
+- validate parent_entry_number and parent_pointer for subdir header
+- validate header_pointer for file entry
 - recurse all files and directories
 - check read activity matches used count
 - check file blocks used matches visited

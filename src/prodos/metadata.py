@@ -3,7 +3,7 @@ from dataclasses import dataclass, fields
 import struct
 import logging
 
-from .globals import access_flags, entry_length, entries_per_block, \
+from .globals import entry_length, entries_per_block, \
     volume_key_block, volume_directory_length
 from .p8datetime import P8DateTime
 
@@ -31,9 +31,24 @@ simple_file_types = {
 }
 
 
-def format_access(flags: int) -> str:
+_access_flags: Final = dict(
+    R = 1<<0,  # read
+    W = 1<<1,  # write
+    I = 1<<2,  # invisible
+    # bits 3 and 4 reserved
+    B = 1<<5,  # backup
+    N = 1<<6,  # rename
+    D = 1<<7,  # destroy
+)
+
+
+def access_byte(s: str = 'RWBND') -> int:
+    return sum(_access_flags[c] for c in s)
+
+
+def access_repr(flags: int) -> str:
     s = ''
-    for c, f in access_flags.items():
+    for c, f in _access_flags.items():
         s += c if flags & f else '-'
     return s
 
@@ -82,7 +97,10 @@ class DirectoryHeaderEntry(NamedEntry):
     _struct: ClassVar = "<8s4s5BH"
     _size: ClassVar = NamedEntry._size + 19
 
-    reserved: bytes
+    # spec suggests there are magic bytes for VolumeDirectoryHeaderEntry
+    # namely $75 $23 $00 $c3 $27 $0d $00 where $23 is version 2.3
+    # but this doesn't seem to be the case in the wild
+    reserved: bytes = bytes(8)
     date_time: P8DateTime
     version: int
     min_version: int
@@ -92,13 +110,15 @@ class DirectoryHeaderEntry(NamedEntry):
     file_count: int
 
     def __repr__(self):
-        flags = format_access(self.access)
+        flags = access_repr(self.access)
         typ = f"{self.storage_type:x}".upper()
         return f"    {self.file_count:d} files in {self.file_name} {typ} {flags} {self.date_time}"
 
     def __post_init___(self):
-        assert self.entry_length == entry_length
-        assert self.entries_per_block == entries_per_block
+        assert self.entry_length == entry_length, \
+            f"DirectoryHeaderEntry: entry_length {self.entry_length} != {entry_length}"
+        assert self.entries_per_block == entries_per_block, \
+            f"DirectoryHeaderEntry: entries_per_block {self.entries_per_block} != {entries_per_block}"
 
     def pack(self) -> bytes:
         return super().pack() + struct.pack(
@@ -145,8 +165,8 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
     _struct: ClassVar = "<HH"
     _size: ClassVar = DirectoryHeaderEntry._size + 4
 
-    bit_map_pointer: int
-    total_blocks: int
+    bit_map_pointer: int        # first block of free map
+    total_blocks: int           # total blocks on device
 
     def pack(self) -> bytes:
         return super().pack() + struct.pack(
@@ -159,7 +179,8 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
     def unpack(kls, buf: bytes) -> Self:
         n = DirectoryHeaderEntry._size
         d = DirectoryHeaderEntry.unpack(buf[:n])
-        assert d.storage_type == storage_type_voldir
+        assert d.storage_type == storage_type_voldir, \
+            f"VolumeDirectoryHeaderEntry bad storage type {d.storage_type:x}"
         (
             bit_map_pointer,
             total_blocks
@@ -176,12 +197,13 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
     _struct: ClassVar = "<HBB"
     _size: ClassVar = DirectoryHeaderEntry._size + 4
 
-    parent_pointer: int
-    parent_entry_number: int
+    parent_pointer: int         # key block of parent dir
+    parent_entry_number: int    # entry index in parent
     parent_entry_length: int = entry_length
 
     def __post_init___(self):
-        assert self.parent_entry_length == entry_length
+        assert self.parent_entry_length == entry_length, \
+            f"SubdirectoryHeaderEntry: unexpected parent_entry_length {self.parent_entry_length} != {entry_length}"
 
     def pack(self) -> bytes:
         return super().pack() + struct.pack(
@@ -195,7 +217,8 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
     def unpack(kls, buf: bytes) -> Self:
         n = DirectoryHeaderEntry._size
         d = DirectoryHeaderEntry.unpack(buf[:n])
-        assert d.storage_type == storage_type_subdir
+        assert d.storage_type == storage_type_subdir, \
+            f"SubdirectoryHeaderEntry: bad storage type {d.storage_type:x}"
         (
             parent_pointer,
             parent_entry_number,
@@ -216,20 +239,20 @@ class FileEntry(NamedEntry):
     root: ClassVar['FileEntry']
 
     file_type: int
-    key_pointer: int
+    key_pointer: int        # pointer fo file key block
     blocks_used: int
     eof: int
     date_time: P8DateTime
-    version: int
-    min_version: int
+    version: int = 0
+    min_version: int = 0
     access: int
-    aux_type: int
+    aux_type: int = 0
     last_mod: P8DateTime
     header_pointer: int     # key block of directory owning this entry
 
     def __repr__(self):
         typ = f"{self.storage_type:1x}/{self.file_type:02x}".upper()
-        flags = format_access(self.access)
+        flags = access_repr(self.access)
         name = self.file_name
         if self.is_dir:
             name += '/'
@@ -256,8 +279,8 @@ class FileEntry(NamedEntry):
             self.file_type,
             self.key_pointer,
             self.blocks_used,
-            self.eof >> 16,
             self.eof & 0xffff,
+            self.eof >> 16,
             self.date_time.pack(),
             self.version,
             self.min_version,
@@ -338,6 +361,8 @@ FileEntry.root = FileEntry(
     last_mod = P8DateTime.empty,
     header_pointer = 0,
 )
+
+# static tests
 
 assert VolumeDirectoryHeaderEntry._size == entry_length
 assert SubdirectoryHeaderEntry._size == entry_length

@@ -2,10 +2,10 @@ from typing import Literal, List, Self
 import logging
 
 from .globals import volume_key_block, volume_directory_length, \
-    block_size, entries_per_block, access_flags
+    block_size, entries_per_block
 from .device import BlockDevice, DeviceFormat
 from .metadata import P8DateTime, FileEntry, VolumeDirectoryHeaderEntry, \
-    storage_type_voldir
+    access_byte, storage_type_voldir
 from .blocks import DirectoryBlock
 from .directory import Directory
 from .file import SimpleFile
@@ -15,7 +15,8 @@ class Volume:
     def __init__(self, device: BlockDevice):
         self.device = device
         vkb = self.device.read_block_type(volume_key_block, DirectoryBlock, unsafe=True)
-        assert isinstance(vkb.header_entry, VolumeDirectoryHeaderEntry)
+        assert isinstance(vkb.header_entry, VolumeDirectoryHeaderEntry), \
+            f"Volume header entry has unexpected type {type(vkb.header_entry)}"
         vh = vkb.header_entry
         assert vh.total_blocks == device.total_blocks, \
             f"Volume directory header block count {vh.total_blocks} != device block count {device.total_blocks}"
@@ -33,27 +34,26 @@ class Volume:
             format: DeviceFormat = DeviceFormat.prodos,
             loader_file_name = ''
         ) -> Self:
-
         device = BlockDevice.create(file_name, total_blocks, bit_map_pointer=6, format=format)
         # reserve two blocks for loader
         device.allocate_block()
         device.allocate_block()
         Directory(
+            device=device,
             header=VolumeDirectoryHeaderEntry(
                 storage_type = storage_type_voldir,
                 file_name = volume_name.upper(),
-                reserved = bytes([0x75, 0x23, 0x00, 0xc3, 0x27, 0x0d, 0x00]),
                 date_time = P8DateTime.now(),
                 version = 0,
                 min_version = 0,
-                access = sum(access_flags[c] for c in 'RWBN'),
+                access = access_byte(),
                 file_count = 0,
                 bit_map_pointer = 6,
                 total_blocks = total_blocks,
             ),
             entries=[FileEntry.empty] * (4 * entries_per_block - 1),
             block_list=list(range(volume_key_block, volume_key_block + volume_directory_length))
-        ).write(device)
+        ).write()
         device.write_free_map()
         volume = kls(device)
         if loader_file_name:
@@ -68,11 +68,16 @@ class Volume:
     def root(self) -> Directory:
         return self.read_directory(FileEntry.root)
 
-    def read_directory(self, entry: FileEntry) -> Directory:
-        return Directory.read(self.device, entry)
+    def parent_directory(self, entry: FileEntry) -> Directory:
+        assert entry.header_pointer >= 2, f"parent_directory: bad header_pointer {entry.header_pointer}"
+        return Directory.read(self.device, entry.header_pointer)
+
+    def read_directory(self, dir_entry: FileEntry) -> Directory:
+        assert dir_entry.is_dir, f"read_directory: not a directory {dir_entry}"
+        return Directory.read(self.device, dir_entry.key_pointer)
 
     def read_simple_file(self, entry: FileEntry) -> SimpleFile:
-        return SimpleFile.read(self.device, entry)
+        return SimpleFile.from_entry(self.device, entry)
 
     def write_loader(self, loader_file_name: str):
         data = open(loader_file_name, 'rb').read()
@@ -89,6 +94,6 @@ class Volume:
             if not p:
                 entries.append(FileEntry.root)
             else:
-                entries += root.path_glob(self.device, p.split('/'))
+                entries += root.path_glob(p.split('/'))
         return entries
 
