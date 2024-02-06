@@ -1,5 +1,5 @@
-This is an inefficient implementation of the
-Apple ProDOS :TM: filesystem based on the
+This is a inefficient but simple implementation of the
+Apple ProDOS :tm: filesystem based on the
 [technical reference manual](https://prodos8.com/docs/techref/file-organization/).
 
 `pyprodos` aims to be compatible with existing `.po` and `.2mg` images used
