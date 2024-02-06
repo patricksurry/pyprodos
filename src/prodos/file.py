@@ -14,7 +14,7 @@ from .p8datetime import P8DateTime
 class SimpleFile:
     device: BlockDevice
     file_name: str
-    file_type: int = 0
+    file_type: int = 0xff        #TODO needed for system file boot
     data: bytes
     block_list: List[int] = field(default_factory=list)
 

@@ -178,7 +178,6 @@ def host_import(src: List[str]):
             file_name=target_name or fname,
             data=open(fname, 'rb').read()
         )
-        print('writing simple file')
         dir.write_simple_file(f)
 
 

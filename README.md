@@ -1,115 +1,59 @@
-package name py-prodos
+This is an inefficient implementation of the
+Apple ProDOS :TM: filesystem based on the
+[technical reference manual](https://prodos8.com/docs/techref/file-organization/).
 
-todo:
+`pyprodos` aims to be compatible with existing `.po` and `.2mg` images used
+for emulating Apple // series hardware.
+It includes a simple command-line tool to create and manipulate ProDOS disk images
+which currently supports `create`, `import`, `export`, `info`, `ls`, `rm` and
+performs a number of volume integrity checks.  There's more [to do](TODO.md).
 
-- something wrong with import X Y  when Y already exists?
+For example, let's recreate a ProDOS boot volume.  Grab the ProDOS 2.4.3
+boot disk from https://prodos8.com/.  (There's a copy in `images/` here.)
+Check what's on it:
 
-- import-blocks
-- export-blocks
-- could add a repl mode https://github.com/tiangolo/typer/issues/185
-- *todo* writing changed directories if block count shrinks
-- chmod/chtype
+    % prodos images/ProDOS_2_4_3.po ls
 
+    BASIC.SYSTEM          10240 2/FF RW-BND 23-12-30T02:43 23-12-30T02:43 21 @ 42
+    ...
+    PRODOS                17128 2/FF RW-BND 23-12-30T02:43 23-12-30T02:43 34 @ 7
+    README                  999 2/04 RW-BND 23-12-30T02:43 23-12-30T02:43 3 @ 251
+        17 files in PRODOS.2.4.3 F RW--ND 23-12-29T19:07
 
-boot test:  export from prodos image, import to new image w/ bootloader, does it boot in emu?
+Let's extract the `PRODOS` o/s and `BASIC.SYSTEM` files.  ProDOS should execute
+the first `.SYSTEM` file it finds after it boots.
 
-- verbose option to show access log
-        print(volume.device.dump_access_log())
+    % prodos images/ProDOS_2_4_3.po export PRODOS BASIC.SYSTEM .
 
-chkdsk:
-- validate parent_entry_number and parent_pointer for subdir header
-- validate header_pointer for file entry
-- recurse all files and directories
-- check read activity matches used count
-- check file blocks used matches visited
+We also need to grab the bootloader, which occupies the first two blocks on the disk.
+We can use `dd` for that since `.po` disk images are just binary files with a 512 byte
+block size. (The `.2mg` format just adds a 64 byte header.)
 
-prodos image from emulator
+    % dd bs=512 count=2 if=images/ProDOS_2_4_3.po of=loader.bin
 
-hexdump -C ~/Downloads/snapshot.viisnapshot | grep 'f5 03 fb'
-00036520  f5 03 fb 03 62 fa fa c3  00 00 00 00 00 00 00 01  |....b...........|
+Now we'll make a new 140K (280 block) floppy boot disk as a `.2mg` image:
 
-36520 - $fff8  = 25528
+    % prodos boot.2mg create --name MYVOL --size 280 --format 2mg --loader loader.bin
 
+and then import our boot files and check the listing:
 
-patch boot:
+    % prodos boot.2mg import PRODOS BASIC.SYSTEM /
 
-py65mon -l loader_plus_voldir.bin -a 0x800
+    % prodos boot.2mg ls
 
-load apple2o.rom top
-load block7.bin 1e00
-load PRODOS.bin 2000
-
-; set Cn00: a0 20 a0 00 a0 03
-f c300 a0 20 a0 00 a0 03 a9 00 18 60
-
-; .a c306
-; $c306  a9 00     LDA #$00
-; $c308  18        CLC
-; $c309  60        RTS
-
-;TODO
-; for status call A=0, CLC, X/Y = block count (lo/hi)
-
-; set CnFF: 06 (for Cn06 entry)
-; set CnFE: %11001111  (or just #$ff, not sure about vols)
-; set CnFC/D: ff ff (max blocks)
-f c3fc ff ff cf 06
-
-; lda #1
-; ldx #30    ; slot 3
-registers a=1, x=30
-
-; breakpoint on prodos entry
-ab 2000
-
-; launch bootloader
-g 801
-
-; breakpoint at Cn06
-ab c306
-
-; check command (0=status, 1=read, 2=write, 3=format)
-m 42/6  (42=cmd, 44/45=bufp, 46/47=blk)
-
-prodos rom entry:
-fe84: SETNORM (video)
+    PRODOS                17128 2/FF RW-BND 24-02-05T19:37 24-02-05T19:37 34 @ 7
+    BASIC.SYSTEM          10240 2/FF RW-BND 24-02-05T19:37 24-02-05T19:37 21 @ 41
+        2 files in MYVOL F RW-BND 24-02-05T19:37
 
 
-The MLI then searches the volume directory of the boot disk for the first file with the name XXX.SYSTEM and type $FF, loads it into memory starting at $2000, and executes it.
+Finally, test the image in your favorite emulator.  I used [VirtualII](https://www.virtualii.com/) and popped my volume in the virtual Disk ][ drive.   After a ProDOS splash screen, you you see the familiar Basic prompt:
 
+                PRODOS BASIC 1.7
+            COPYRIGHT APPLE  1983-92
 
-other entries from disass:
+    ]
 
-python ../pydisass6502/disass.py -i PRODOS.bin -s 0x2000 -o PRODOS.asm -c PRODOS.stats
-
-https://6502disassembly.com/a2-rom/OrigF8ROM.html
-
-    {"addr": "fb1e", "symbol": "PREAD", "comm": "read paddles"},
-    {"addr": "fb2f", "symbol": "INIT",  "comm": "init gfx"},
-    {"addr": "fbb3", "symbol": "MUL", "comm": "multiply?"},
-    {"addr": "fbc0", "symbol": "MDRTS", "comm": "known rts"},
-    {"addr": "fc58", "symbol": "HOME", "comm": "cls/home?"},
-    {"addr": "fdf9", "symbol": "VIDOUT", "comm": "output acc as ascii"},
-    {"addr": "fe1f", "symbol": "SETMODE_RTS", "comm": "another rts},
-    {"addr": "fe84", "symbol": "SETNORM", "comm": "set normal video"},
-    {"addr": "fe89", "symbol": "SETKBD", "comm": "setup keyboard"},
-    {"addr": "fe93", "symbol": "SETVID", "comm": "setup video out"},
-    {"addr": "fefe", "symbol": "$fefe", "comm": "?? bytes fa fa a9 - checks writable"},
-    {"addr": "feff", "symbol": "$feff"},
-    {"addr": "ff00", "symbol": "$ff00"},
-    {"addr": "fffe", "symbol": "IRQL", "comm": "set to $fa86 in apple rom"},
-    {"addr": "ffff", "symbol": "IRQH"}
-
-
-
-
-python ../pydisass6502/disass.py -i prodos_loader.bin -o prodos_loader.asm -c prodos_loader.stats -e prodos_loader.map.json
-
-loader blk0-1 @ 800-bff
-vol dir blk 2-5 @ c00-1400
-prodos @ 2000
-
-blk 7 -> 1e00
-blk 8 -> 2000
-
+My goal was to learn how the on-disk representation worked and manage
+disk images for a 6502-based breadboard computer with a portable ProDOS
+filestyem kernel I ported: [p8fs](https://github.com/patricksurry/p8fs).
 
