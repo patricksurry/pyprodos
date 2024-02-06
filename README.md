@@ -31,15 +31,15 @@ block size. (The `.2mg` format just adds a 64 byte header.)
 
     % dd bs=512 count=2 if=images/ProDOS_2_4_3.po of=loader.bin
 
-Now we'll make a new 140K (280 block) floppy boot disk as a `.2mg` image:
+Now we'll make a new 140K (280 block) floppy boot disk:
 
-    % prodos boot.2mg create --name MYVOL --size 280 --format 2mg --loader loader.bin
+    % prodos boot.po create --name MYVOL --size 280 --loader loader.bin
 
 and then import our boot files and check the listing:
 
-    % prodos boot.2mg import PRODOS BASIC.SYSTEM /
+    % prodos boot.po import PRODOS BASIC.SYSTEM /
 
-    % prodos boot.2mg ls
+    % prodos boot.po ls
 
     PRODOS                17128 2/FF RW-BND 24-02-05T19:37 24-02-05T19:37 34 @ 7
     BASIC.SYSTEM          10240 2/FF RW-BND 24-02-05T19:37 24-02-05T19:37 21 @ 41
