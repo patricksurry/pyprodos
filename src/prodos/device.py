@@ -1,4 +1,4 @@
-from typing import Tuple, List, Literal, Optional, Type, TypeVar
+from typing import Literal, Optional, Type, TypeVar
 import logging
 from bitarray import bitarray
 from mmap import mmap, ACCESS_READ, ACCESS_WRITE
@@ -29,11 +29,18 @@ class BlockDevice:
         self.mm = mmap(f.fileno(), 0, access=access)
         #TODO mmap
         self.skip = 0
-        self._access_log: List[Tuple[AccessT, int]] = []
+        self._access_log: list[tuple[AccessT, int]] = []
 
         # see https://gswv.apple2.org.za/a2zine/Docs/DiskImage_2MG_Info.txt
         if path.splitext(fname)[1].lower() == '.2mg':
-            (ident, creator, size, version, format) = struct.unpack_from(self._struct_2mg, self.mm)
+
+            (
+                ident,
+                creator,    # type: ignore  # not currently used
+                size,
+                version,    # type: ignore  # not currently used
+                format
+            ) = struct.unpack_from(self._struct_2mg, self.mm)
             assert ident == b'2IMG' and format == 1, "BlockDevice: Can't handle non-prodos .2mg volume"
             self.skip = size
 
@@ -60,14 +67,14 @@ class BlockDevice:
         return f"BlockDevice on {self.fname} contains {self.total_blocks} total blocks, {self.blocks_free} free ({used:.0%} used)"
 
     @classmethod
-    def create(kls,
+    def create(cls,
             fname: str,
             total_blocks: int,
             bit_map_pointer: int,
             format: DeviceFormat = DeviceFormat.prodos,
         ):
         if format == '2mg':
-            prefix = struct.pack(kls._struct_2mg, b'2IMG', b'PYP8', 64, 1, 1)
+            prefix = struct.pack(cls._struct_2mg, b'2IMG', b'PYP8', 64, 1, 1)
         else:
             prefix = bytes()
 
@@ -82,7 +89,7 @@ class BlockDevice:
     def mark_session(self) -> int:
         return len(self._access_log)
 
-    def get_access_log(self, access_types: str, mark=0):
+    def get_access_log(self, access_types: str, mark: int=0):
         return [i for (t, i) in self._access_log[mark:] if t in access_types]
 
     def dump_access_log(self):
@@ -91,10 +98,10 @@ class BlockDevice:
              for k in range(0, len(self._access_log), 12)
         )
 
-    def read_block_type(self, block_index: int, factory: Type[BlockT], unsafe=False) -> BlockT:
+    def read_block_type(self, block_index: int, factory: Type[BlockT], unsafe: bool=False) -> BlockT:
         return factory.unpack(self.read_block(block_index, unsafe))
 
-    def read_block(self, block_index: int, unsafe=False) -> bytes:
+    def read_block(self, block_index: int, unsafe: bool=False) -> bytes:
         assert unsafe or not self.free_map[block_index], f"read_block({block_index}) on free block"
         self._access_log.append(('r', block_index))
         start = block_index * block_size + self.skip
@@ -113,13 +120,13 @@ class BlockDevice:
         self._access_log.append(('a', block_index))
         return block_index
 
-    def free_block(self, block_index):
+    def free_block(self, block_index: int):
         assert not self.free_map[block_index], f"free_block({block_index}): already free"
         self.write_block(block_index, bytes(block_size))
         self.free_map[block_index] = True
         self._access_log.append(('f', block_index))
 
-    def reset_free_map(self, block_index):
+    def reset_free_map(self, block_index: int):
         self.bit_map_pointer = block_index
         k = block_size_bits + 3
         n = len(self.free_map) >> k
@@ -130,9 +137,9 @@ class BlockDevice:
         assert self.total_blocks <= len(self.free_map) < self.total_blocks + (block_size << 3), \
             f"reset_free_map: unexpected free_map length {len(self.free_map)} for {self.total_blocks} blocks"
         if any(self.free_map[:block_index+n]):
-            logging.warn("bitmap shows free space in volume prologue")
+            logging.warning("bitmap shows free space in volume prologue")
         if any(self.free_map[self.total_blocks:]):
-            logging.warn("bitmap shows free space past end of volume")
+            logging.warning("bitmap shows free space past end of volume")
 
     def write_free_map(self):
         assert self.bit_map_pointer is not None, "Device bit_map_pointer not set"

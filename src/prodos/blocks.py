@@ -1,13 +1,12 @@
-from typing import ClassVar, List, Self, Optional
+from typing import ClassVar, Self, Optional
 from dataclasses import dataclass
 import struct
 from bitarray import bitarray
 import logging
 
 from .globals import entry_length, entries_per_block, block_size
-from .metadata import FileEntry, DirectoryHeaderEntry, \
-    NamedEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry, \
-    storage_type_subdir, storage_type_voldir
+from .metadata import FileEntry, NamedEntry, StorageType, \
+    DirectoryHeaderEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry
 
 
 @dataclass(kw_only=True)
@@ -16,23 +15,23 @@ class AbstractBlock:
         return NotImplemented
 
     @classmethod
-    def unpack(kls, buf) -> Self:
+    def unpack(cls, buf: bytes) -> Self:
         return NotImplemented
 
 
 @dataclass(kw_only=True)
 class DirectoryBlock(AbstractBlock):
+    SIZE: ClassVar = 4
     _struct: str = "<HH"
-    _size: ClassVar = 4
-    _header_factory: ClassVar = {
-        storage_type_voldir: VolumeDirectoryHeaderEntry,
-        storage_type_subdir: SubdirectoryHeaderEntry
+    _header_factory: ClassVar[dict[StorageType, type[DirectoryHeaderEntry]]] = {
+        StorageType.voldir: VolumeDirectoryHeaderEntry,
+        StorageType.subdir: SubdirectoryHeaderEntry
     }
 
     prev_pointer: int
     next_pointer: int
     header_entry: Optional[DirectoryHeaderEntry] = None
-    file_entries: List[FileEntry]
+    file_entries: list[FileEntry]
 
     def __repr__(self):
         s = f"<{self.prev_pointer:d}:{self.next_pointer:d}>\n"
@@ -53,27 +52,27 @@ class DirectoryBlock(AbstractBlock):
         return data + bytes(padding)
 
     @classmethod
-    def unpack(kls, buf: bytes) -> Self:
-        offset = kls._size
+    def unpack(cls, buf: bytes) -> Self:
+        offset = cls.SIZE
         (
             prev_pointer, next_pointer
-        ) = struct.unpack(kls._struct, buf[:offset])
+        ) = struct.unpack(cls._struct, buf[:offset])
         # check the start of the first entry to see if it's a header entry
-        d = NamedEntry.unpack(buf[offset:offset+NamedEntry._size])
+        d = NamedEntry.unpack(buf[offset:offset + NamedEntry.SIZE])
         header: Optional[DirectoryHeaderEntry] = None
-        header_factory = kls._header_factory.get(d.storage_type)
+        header_factory = cls._header_factory.get(d.storage_type)
         if header_factory:
             header = header_factory.unpack(buf[offset:offset + entry_length])
             offset += entry_length
 
-        file_entries: List[FileEntry] = []
+        file_entries: list[FileEntry] = []
         while len(file_entries) + (1 if header else 0) < entries_per_block:
             file_entries.append(FileEntry.unpack(buf[offset:offset + entry_length]))
             offset += entry_length
 
         if any(buf[offset:]):
-            logging.warn("DirectoryBlock: non-zero bytes in padding")
-        return kls(
+            logging.warning("DirectoryBlock: non-zero bytes in padding")
+        return cls(
             prev_pointer=prev_pointer,
             next_pointer=next_pointer,
             header_entry=header,
@@ -87,7 +86,7 @@ class IndexBlock(AbstractBlock):
     index blocks store 256 two byte block pointers, with the lsbs
     in bytes 0-255 and the msbs in bytes 256-511
     """
-    block_pointers: List[int]
+    block_pointers: list[int]
 
     def pack(self) -> bytes:
         return bytes(
@@ -97,8 +96,8 @@ class IndexBlock(AbstractBlock):
         )
 
     @classmethod
-    def unpack(kls, buf) -> Self:
-        return kls(block_pointers=[
+    def unpack(cls, buf: bytes) -> Self:
+        return cls(block_pointers=[
             lo + (hi<<8) for (lo, hi) in zip(buf[:256], buf[256:])
         ])
 
@@ -118,7 +117,7 @@ class BitmapBlock(AbstractBlock):
         return self.free_map.tobytes()
 
     @classmethod
-    def unpack(kls, buf) -> Self:
+    def unpack(cls, buf: bytes) -> Self:
         bits = bitarray()
         bits.frombytes(buf)
-        return kls(free_map=bits)
+        return cls(free_map=bits)

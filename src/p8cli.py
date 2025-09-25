@@ -54,12 +54,12 @@ def check():
     print("TODO: check")
 
 
-def default_path(paths: Optional[List[str]]) -> List[str]:
+def default_path(paths: Optional[list[str]]) -> list[str]:
     return paths or ['/']
 
 
 @app.command()
-def ls(paths: Annotated[Optional[List[str]], typer.Argument(callback=default_path)] = None):
+def ls(paths: Annotated[Optional[list[str]], typer.Argument(callback=default_path)] = None):
     """
     Show volume listing for path like `/some/directory/some/file`
 
@@ -83,7 +83,7 @@ def ls(paths: Annotated[Optional[List[str]], typer.Argument(callback=default_pat
 
 
 @app.command()
-def cp(src: List[str], dst: str):
+def cp(src: list[str], dst: str):
     """
     TODO Copy SOURCE to DEST, or multiple SOURCE(s) to DIRECTORY
     """
@@ -94,7 +94,7 @@ def cp(src: List[str], dst: str):
 
 
 @app.command()
-def mv(src: List[str], dst: str):
+def mv(src: list[str], dst: str):
     """
     TODO Move from SRC to DST
     """
@@ -102,7 +102,7 @@ def mv(src: List[str], dst: str):
 
 
 @app.command()
-def rm(src: List[str]):
+def rm(src: list[str]):
     """
     Remove simple file(s) at SRC
     """
@@ -124,7 +124,7 @@ def rm(src: List[str]):
 
 
 @app.command()
-def rmdir(src: List[str]):
+def rmdir(src: list[str]):
     """
     TODO Remove empty directory at SRC
     """
@@ -132,7 +132,7 @@ def rmdir(src: List[str]):
 
 
 @app.command('import')
-def host_import(src: List[str]):
+def host_import(src: list[str]):
     """
     Import host files at SRC to DST
 
@@ -182,7 +182,7 @@ def host_import(src: List[str]):
 
 
 @app.command('export')
-def host_export(src: List[str]):
+def host_export(src: list[str]):
     """
     Export SRC to host DST, or SRC(s) to host DIRECTORY
     """

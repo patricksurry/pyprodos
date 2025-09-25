@@ -1,5 +1,6 @@
-from typing import ClassVar, Dict, Self, Final, Protocol
+from typing import ClassVar, Self, Final, Protocol, Any
 from dataclasses import dataclass, fields
+from enum import IntEnum
 import struct
 import logging
 
@@ -7,27 +8,66 @@ from .globals import entry_length, entries_per_block, \
     volume_key_block, volume_directory_length
 from .p8datetime import P8DateTime
 
+"""
+Figure B-12. Header and Entry Fields
 
-storage_type_empty: Final = 0x0
 
-storage_type_dir: Final = 0xD
-storage_type_subdir: Final = 0xE
-storage_type_voldir: Final = 0xF
+                                                                                 +-------- Write-Enable
+                                                                                 |   +---- Read-Enable
+                                                                                 |   |
+ +--------------+                       +----------+   +-------------------------------+
+ | storage_type |                       |  access  | = | D | RN | B | Reserved | W | R |
+ |   (4 bits)   |                       | (1 byte) |   +-------------------------------+
+ +--------------+                       +----------+     |   |    |
+                                                         |   |    +----------------------- Backup
+ $0 = inactive file entry                                |   +---------------------------- Rename-Enable
+ $1 = seedling file entry                                +-------------------------------- Destroy-Enable
+ $2 = sapling file entry
+ $3 = tree file entry
+ $D = subdirectory file entry                          name_length = length of file_name ($1-$F)
+ $E = subdirectory header                              file_name = $1-$F ASCII characters: first = letters
+ $F = volume directory header                                      rest are letters, digits, periods.
+                                                       key_pointer = block address of file's key block
+ +-----------+                                         blocks_used = total blocks for file
+ | file_type |                                         EOF = byte number for end of file ($0-$FFFFFF)
+ | (1 byte)  |                                         version, min_version = 0 for ProDOS 1.0
+ +-----------+                                         entry_length = $27 for ProDOS 1.0
+                                                       entries_per_block = $0D for ProDOS 1.0
+ See section B.4.2.4                                   aux_type = defined by system program
+                                                       file_count = total files in directory
+                                                       bit_map_pointer = block address of bit map
+                                                       total_blocks = total blocks on volume
+                                                       parent_pointer = block address containing entry
+                                                       parent_entry_number = number in that block
+                                                       parent_entry_length = $27 for ProDOS 1.0
+                                                       header pointer = block address of key block
+                                                       of entry's directory
+"""
 
-storage_type_seedling: Final = 0x1
-storage_type_sapling: Final = 0x2
-storage_type_tree: Final = 0x3
+
+#TODO non-standard types https://prodos8.com/docs/technote/25/
+# 4=pascal area, 5=extended file with ExtendedKeyBlock with data and resource fork
+
+class StorageType(IntEnum):
+    empty = 0
+    seedling = 1
+    sapling = 2
+    tree = 3
+    dir = 0xD
+    subdir = 0xE
+    voldir = 0xF
+
 
 directory_types = {
-    storage_type_dir,
-    storage_type_subdir,
-    storage_type_voldir,
+    StorageType.dir,
+    StorageType.subdir,
+    StorageType.voldir,
 }
 
 simple_file_types = {
-    storage_type_seedling,
-    storage_type_sapling,
-    storage_type_tree,
+    StorageType.seedling,
+    StorageType.sapling,
+    StorageType.tree,
 }
 
 
@@ -55,7 +95,7 @@ def access_repr(flags: int) -> str:
 
 class IsDataclass(Protocol):
     # verify whether obj is a dataclass
-    __dataclass_fields__: ClassVar[Dict]
+    __dataclass_fields__: ClassVar[dict[str, Any]]
 
 
 def shallow_dict(d: IsDataclass):
@@ -65,12 +105,10 @@ def shallow_dict(d: IsDataclass):
 
 @dataclass(kw_only=True)
 class NamedEntry:
+    SIZE: ClassVar = 16
     _struct: ClassVar = "<B15s"
-    _size: ClassVar = 16
 
-    # non-standard types https://prodos8.com/docs/technote/25/
-    # 4=pascal area, 5=extended file with ExtendedKeyBlock with data and resource fork
-    storage_type: int       # 0=unused, 1=seedling, 2=sapling, 3=tree, D=subdir, E=subdir header, F=vol header
+    storage_type: StorageType
     file_name: str
 
     def pack(self) -> bytes:
@@ -78,15 +116,15 @@ class NamedEntry:
         return struct.pack(NamedEntry._struct, type_len, self.file_name.encode('ascii'))
 
     @classmethod
-    def unpack(kls, buf: bytes) -> Self:
+    def unpack(cls, buf: bytes) -> Self:
         (
             type_len,
             name,
-        ) = struct.unpack(kls._struct, buf)
+        ) = struct.unpack(cls._struct, buf)
         storage_type = (type_len >> 4) & 0b1111
         name = name[:type_len & 0b1111]
         file_name = name.decode('ascii', errors='ignore')
-        return kls(
+        return cls(
             storage_type=storage_type,
             file_name=file_name,
         )
@@ -94,8 +132,8 @@ class NamedEntry:
 
 @dataclass(kw_only=True)
 class DirectoryHeaderEntry(NamedEntry):
+    SIZE: ClassVar = NamedEntry.SIZE + 19
     _struct: ClassVar = "<8s4s5BH"
-    _size: ClassVar = NamedEntry._size + 19
 
     # spec suggests there are magic bytes for VolumeDirectoryHeaderEntry
     # namely $75 $23 $00 $c3 $27 $0d $00 where $23 is version 2.3
@@ -134,8 +172,8 @@ class DirectoryHeaderEntry(NamedEntry):
         )
 
     @classmethod
-    def unpack(kls, buf: bytes) -> Self:
-        n = NamedEntry._size
+    def unpack(cls, buf: bytes) -> Self:
+        n = NamedEntry.SIZE
         d = NamedEntry.unpack(buf[:n])
         (
             reserved,
@@ -146,8 +184,8 @@ class DirectoryHeaderEntry(NamedEntry):
             entry_length,
             entries_per_block,
             file_count
-        ) = struct.unpack(kls._struct, buf[n:])
-        return kls(
+        ) = struct.unpack(cls._struct, buf[n:])
+        return cls(
             reserved=reserved,
             date_time=P8DateTime.unpack(dt),
             version=version,
@@ -162,8 +200,52 @@ class DirectoryHeaderEntry(NamedEntry):
 
 @dataclass(kw_only=True, repr=False)
 class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
+    """
+    Figure B-3. The Volume Directory Header
+
+
+    Field                                Byte of
+   Length                                Block
+          +----------------------------+
+  1 byte  | storage_type | name_length | $04
+          |----------------------------|
+          |                            | $05
+          /                            /
+ 15 bytes /        file_name           /
+          |                            | $13
+          |----------------------------|
+          |                            | $14
+          /                            /
+  8 bytes /          reserved          /
+          |                            | $1B
+          |----------------------------|
+          |                            | $1C
+          |          creation          | $1D
+  4 bytes |        date & time         | $1D
+          |                            | $1F
+          |----------------------------|
+  1 byte  |          version           | $20
+          |----------------------------|
+  1 byte  |        min_version         | $21
+          |----------------------------|
+  1 byte  |           access           | $22
+          |----------------------------|
+  1 byte  |        entry_length        | $23
+          |----------------------------|
+  1 byte  |     entries_per_block      | $24
+          |----------------------------|
+          |                            | $25
+  2 bytes |         file_count         | $26
+          |----------------------------|
+          |                            | $27
+  2 bytes |      bit_map_pointer       | $28
+          |----------------------------|
+          |                            | $29
+  2 bytes |        total_blocks        | $2A
+          +----------------------------+
+    """
+    SIZE: ClassVar = DirectoryHeaderEntry.SIZE + 4
     _struct: ClassVar = "<HH"
-    _size: ClassVar = DirectoryHeaderEntry._size + 4
 
     bit_map_pointer: int        # first block of free map
     total_blocks: int           # total blocks on device
@@ -176,16 +258,16 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
         )
 
     @classmethod
-    def unpack(kls, buf: bytes) -> Self:
-        n = DirectoryHeaderEntry._size
+    def unpack(cls, buf: bytes) -> Self:
+        n = DirectoryHeaderEntry.SIZE
         d = DirectoryHeaderEntry.unpack(buf[:n])
-        assert d.storage_type == storage_type_voldir, \
+        assert d.storage_type == StorageType.voldir, \
             f"VolumeDirectoryHeaderEntry bad storage type {d.storage_type:x}"
         (
             bit_map_pointer,
             total_blocks
-        ) = struct.unpack(kls._struct, buf[n:])
-        return kls(
+        ) = struct.unpack(cls._struct, buf[n:])
+        return cls(
             bit_map_pointer=bit_map_pointer,
             total_blocks=total_blocks,
             **shallow_dict(d)
@@ -194,8 +276,53 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
 
 @dataclass(kw_only=True, repr=False)
 class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
+    """
+    Figure B-4. The Subdirectory Header
+
+
+    Field                                Byte of
+    Length                                Block
+            +----------------------------+
+    1 byte  | storage_type | name_length | $04
+            |----------------------------|
+            |                            | $05
+            /                            /
+    15 bytes /         file_name          /
+            |                            | $13
+            |----------------------------|
+            |                            | $14
+            /                            /
+    8 bytes /          reserved          /
+            |                            | $1B
+            |----------------------------|
+            |                            | $1C
+            |          creation          | $1D
+    4 bytes |        date & time         | $1D
+            |                            | $1F
+            |----------------------------|
+    1 byte  |          version           | $20
+            |----------------------------|
+    1 byte  |        min_version         | $21
+            |----------------------------|
+    1 byte  |           access           | $22
+            |----------------------------|
+    1 byte  |        entry_length        | $23
+            |----------------------------|
+    1 byte  |     entries_per_block      | $24
+            |----------------------------|
+            |                            | $25
+    2 bytes |         file_count         | $26
+            |----------------------------|
+            |                            | $27
+    2 bytes |       parent_pointer       | $28
+            |----------------------------|
+    1 byte  |    parent_entry_number     | $29
+            |----------------------------|
+    1 byte  |    parent_entry_length     | $2A
+            +----------------------------+
+    """
+    SIZE: ClassVar = DirectoryHeaderEntry.SIZE + 4
     _struct: ClassVar = "<HBB"
-    _size: ClassVar = DirectoryHeaderEntry._size + 4
 
     parent_pointer: int         # key block of parent dir
     parent_entry_number: int    # entry index in parent
@@ -214,17 +341,17 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
         )
 
     @classmethod
-    def unpack(kls, buf: bytes) -> Self:
-        n = DirectoryHeaderEntry._size
+    def unpack(cls, buf: bytes) -> Self:
+        n = DirectoryHeaderEntry.SIZE
         d = DirectoryHeaderEntry.unpack(buf[:n])
-        assert d.storage_type == storage_type_subdir, \
+        assert d.storage_type == StorageType.subdir, \
             f"SubdirectoryHeaderEntry: bad storage type {d.storage_type:x}"
         (
             parent_pointer,
             parent_entry_number,
             parent_entry_length
-        ) = struct.unpack(kls._struct, buf[n:])
-        return kls(
+        ) = struct.unpack(cls._struct, buf[n:])
+        return cls(
             parent_pointer=parent_pointer,
             parent_entry_number=parent_entry_number,
             parent_entry_length=parent_entry_length,
@@ -233,8 +360,58 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
 
 @dataclass(kw_only=True)
 class FileEntry(NamedEntry):
+    """
+    Figure B-5. The File Entry
+
+
+    Field                                 Entry
+    Length                                Offset
+            +----------------------------+
+    1 byte  | storage_type | name_length | $00
+            |----------------------------|
+            |                            | $01
+            /                            /
+    15 bytes /         file_name          /
+            |                            | $0F
+            |----------------------------|
+    1 byte  |         file_type          | $10
+            |----------------------------|
+            |                            | $11
+    2 bytes |        key_pointer         | $12
+            |----------------------------|
+            |                            | $13
+    2 bytes |        blocks_used         | $14
+            |----------------------------|
+            |                            | $15
+    3 bytes |            EOF             |
+            |                            | $17
+            |----------------------------|
+            |                            | $18
+            |          creation          |
+    4 bytes |        date & time         |
+            |                            | $1B
+            |----------------------------|
+    1 byte  |          version           | $1C
+            |----------------------------|
+    1 byte  |        min_version         | $1D
+            |----------------------------|
+    1 byte  |           access           | $1E
+            |----------------------------|
+            |                            | $1F
+    2 bytes |          aux_type          | $20
+            |----------------------------|
+            |                            | $21
+            |                            |
+    4 bytes |          last mod          |
+            |                            | $24
+            |----------------------------|
+            |                            | $25
+    2 bytes |       header_pointer       | $26
+            +----------------------------+
+
+    """
+    SIZE: ClassVar = NamedEntry.SIZE + 23
     _struct: ClassVar = "<BHHHB4sBBBH4sH"
-    _size: ClassVar = NamedEntry._size + 23
     empty: ClassVar['FileEntry']
     root: ClassVar['FileEntry']
 
@@ -264,7 +441,7 @@ class FileEntry(NamedEntry):
 
     @property
     def is_volume_dir(self) -> bool:
-        return self.storage_type == storage_type_voldir
+        return self.storage_type == StorageType.voldir
 
     @property
     def is_simple_file(self) -> bool:
@@ -291,12 +468,12 @@ class FileEntry(NamedEntry):
         )
 
     @classmethod
-    def unpack(kls, buf: bytes) -> Self:
-        n = NamedEntry._size
+    def unpack(cls, buf: bytes) -> Self:
+        n = NamedEntry.SIZE
         d = NamedEntry.unpack(buf[:n])
 
-        if d.storage_type not in {storage_type_empty, storage_type_dir} | simple_file_types:
-            logging.warn(f"FileEntry: unexpected storage type {d.storage_type:x}")
+        if d.storage_type not in {StorageType.empty, StorageType.dir} | simple_file_types:
+            logging.warning(f"FileEntry: unexpected storage type {d.storage_type:x}")
 
         (
             file_type,
@@ -311,9 +488,9 @@ class FileEntry(NamedEntry):
             aux_type,
             mt,
             header_pointer,
-        ) = struct.unpack(kls._struct, buf[n:])
+        ) = struct.unpack(cls._struct, buf[n:])
 
-        return kls(
+        return cls(
             file_type=file_type,
             key_pointer=key_pointer,
             blocks_used=blocks_used,
@@ -330,7 +507,7 @@ class FileEntry(NamedEntry):
 
 # empty file entry to fill unused slots
 FileEntry.empty = FileEntry(
-    storage_type = storage_type_empty,
+    storage_type = StorageType.empty,
     file_name = '',
     file_type = 0,
     key_pointer = 0,
@@ -347,7 +524,7 @@ FileEntry.empty = FileEntry(
 
 # dummy record to indicate root directory
 FileEntry.root = FileEntry(
-    storage_type = storage_type_voldir,
+    storage_type = StorageType.voldir,
     file_name = '/',
     file_type = 0xff,
     key_pointer = volume_key_block,
@@ -364,7 +541,7 @@ FileEntry.root = FileEntry(
 
 # static tests
 
-assert VolumeDirectoryHeaderEntry._size == entry_length
-assert SubdirectoryHeaderEntry._size == entry_length
-assert FileEntry._size == entry_length
+assert VolumeDirectoryHeaderEntry.SIZE == entry_length
+assert SubdirectoryHeaderEntry.SIZE == entry_length
+assert FileEntry.SIZE == entry_length
 

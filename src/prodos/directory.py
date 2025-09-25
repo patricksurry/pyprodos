@@ -1,10 +1,10 @@
-from typing import List, Optional
+from typing import Optional, cast
 from dataclasses import dataclass, field
 import logging
 from fnmatch import fnmatch
 
 from .globals import entries_per_block
-from .metadata import FileEntry, DirectoryHeaderEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry
+from .metadata import FileEntry, DirectoryHeaderEntry, VolumeDirectoryHeaderEntry
 from .blocks import DirectoryBlock
 from .device import BlockDevice
 from .file import SimpleFile
@@ -13,10 +13,33 @@ from .p8datetime import P8DateTime
 
 @dataclass(kw_only=True)
 class Directory:
+    r"""
+    Figure B-2. Directory File Format
+
+               Key Block    Any Block         Last Block
+             / +-------+    +-------+         +-------+
+            |  |   0   |<---|Pointer|<--...<--|Pointer|     Blocks of a directory:
+            |  |-------|    |-------|         |-------|     Not necessarily contiguous,
+            |  |Pointer|--->|Pointer|-->...-->|   0   |     linked by pointers.
+            |  |-------|    |-------|         |-------|
+            |  |Header |    | Entry |   ...   | Entry |
+            |  |-------|    |-------|         |-------|     Header describes the
+            |  | Entry |    | Entry |   ...   | Entry |     directory file and its
+            |  |-------|    |-------|         |-------|     contents.
+      One  /   / More  /    / More  /         / More  /
+     Block \   /Entries/    /Entries/         /Entries/
+            |  |-------|    |-------|         |-------|     Entry describes
+            |  | Entry |    | Entry |   ...   | Entry |     and points to a file
+            |  |-------|    |-------|         |-------|     (subdirectory or
+            |  | Entry |    | Entry |   ...   | Entry |     standard) in that
+            |  |-------|    |-------|         |-------|     directory.
+            |  |Unused |    |Unused |   ...   |Unused |
+             \ +-------+    +-------+         +-------+
+    """
     device: BlockDevice
     header: DirectoryHeaderEntry
-    entries: List[FileEntry]
-    block_list: List[int] = field(default_factory=list)
+    entries: list[FileEntry]
+    block_list: list[int] = field(default_factory=list[int])
 
     def __repr__(self):
         s = '\n'.join([repr(e) for e in self.entries if e.is_active])
@@ -25,14 +48,14 @@ class Directory:
     def __post_init__(self):
         active_count = len([e for e in self.entries if e.is_active])
         if self.header.file_count != active_count:
-            logging.warn(f"Directory file_count {self.header.file_count} != {active_count} active entries")
+            logging.warning(f"Directory file_count {self.header.file_count} != {active_count} active entries")
 
-    def file_glob(self, pattern: str) -> List[FileEntry]:
+    def file_glob(self, pattern: str) -> list[FileEntry]:
         return [
             e for e in self.entries if e.is_active and fnmatch(e.file_name, pattern)
         ]
 
-    def path_glob(self, patterns: List[str]) -> List[FileEntry]:
+    def path_glob(self, patterns: list[str]) -> list[FileEntry]:
         pattern = patterns.pop(0)
 
         entries = self.file_glob(pattern)
@@ -46,7 +69,7 @@ class Directory:
                 for e in entries
                 if e.is_dir
             ),
-            []
+            cast(list[FileEntry], [])
         )
 
     def add_entry(self, entry: FileEntry):
@@ -113,8 +136,8 @@ class Directory:
         assert offset == len(self.entries), f"Directory.write: unexpected offset {offset} != {len(self.entries)}"
 
     @classmethod
-    def read(kls, device: BlockDevice, block_index: int):
-        entries: List[FileEntry] = []
+    def read(cls, device: BlockDevice, block_index: int):
+        entries: list[FileEntry] = []
         prev = 0
         mark = device.mark_session()
         header: Optional[DirectoryHeaderEntry] = None
@@ -128,7 +151,7 @@ class Directory:
                 assert not db.header_entry, "Directory.read: Unexpected DirectoryHeaderEntry after key block"
 
             if db.prev_pointer != prev:
-                logging.warn(f"Directory.read: block {block_index} has prev_pointer {db.prev_pointer} != {prev}")
+                logging.warning(f"Directory.read: block {block_index} has prev_pointer {db.prev_pointer} != {prev}")
             entries += db.file_entries
             if not db.next_pointer:
                 break
@@ -136,7 +159,7 @@ class Directory:
             block_index = db.next_pointer
 
         assert header, "Directory.read: no header entry"
-        return kls(
+        return cls(
             device=device,
             header=header,
             entries=entries,

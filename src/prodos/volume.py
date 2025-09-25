@@ -1,17 +1,28 @@
-from typing import Literal, List, Self
+from typing import Literal, Self
 import logging
 
 from .globals import volume_key_block, volume_directory_length, \
     block_size, entries_per_block
 from .device import BlockDevice, DeviceFormat
 from .metadata import P8DateTime, FileEntry, VolumeDirectoryHeaderEntry, \
-    access_byte, storage_type_voldir
+    access_byte, StorageType
 from .blocks import DirectoryBlock
 from .directory import Directory
 from .file import SimpleFile
 
 
 class Volume:
+    """
+    Figure B-1. Blocks on a Volume
+
+    +-----------------------------------   ----------------------------------   -------------------
+    |         |         |   Block 2   |     |   Block n    |  Block n + 1  |     |    Block p    |
+    | Block 0 | Block 1 |   Volume    | ... |    Volume    |    Volume     | ... |    Volume     | Other
+    | Loader  | Loader  |  Directory  |     |  Directory   |    Bit Map    |     |    Bit Map    | Files
+    |         |         | (Key Block) |     | (Last Block) | (First Block) |     | (Last Block)  |
+    +-----------------------------------   ----------------------------------   -------------------
+    """
+
     def __init__(self, device: BlockDevice):
         self.device = device
         vkb = self.device.read_block_type(volume_key_block, DirectoryBlock, unsafe=True)
@@ -23,16 +34,16 @@ class Volume:
         self.device.reset_free_map(vh.bit_map_pointer)
 
     @classmethod
-    def from_file(kls, file_name: str, mode: Literal['ro', 'rw']='ro') -> Self:
-        return kls(BlockDevice(file_name, mode))
+    def from_file(cls, file_name: str, mode: Literal['ro', 'rw']='ro') -> Self:
+        return cls(BlockDevice(file_name, mode))
 
     @classmethod
-    def create(kls,
+    def create(cls,
             file_name: str,
             volume_name: str = 'PYP8',
-            total_blocks = 65535,
+            total_blocks: int = 65535,
             format: DeviceFormat = DeviceFormat.prodos,
-            loader_file_name = ''
+            loader_file_name: str = ''
         ) -> Self:
         device = BlockDevice.create(file_name, total_blocks, bit_map_pointer=6, format=format)
         # reserve two blocks for loader
@@ -41,7 +52,7 @@ class Volume:
         Directory(
             device=device,
             header=VolumeDirectoryHeaderEntry(
-                storage_type = storage_type_voldir,
+                storage_type = StorageType.voldir,
                 file_name = volume_name.upper(),
                 date_time = P8DateTime.now(),
                 version = 0,
@@ -55,7 +66,7 @@ class Volume:
             block_list=list(range(volume_key_block, volume_key_block + volume_directory_length))
         ).write()
         device.write_free_map()
-        volume = kls(device)
+        volume = cls(device)
         if loader_file_name:
             volume.write_loader(loader_file_name)
         return volume
@@ -82,12 +93,12 @@ class Volume:
     def write_loader(self, loader_file_name: str):
         data = open(loader_file_name, 'rb').read()
         if len(data) > 2 * block_size:
-            logging.warn(f"Volume.write_loader truncating {loader_file_name} at {2*block_size} bytes")
+            logging.warning(f"Volume.write_loader truncating {loader_file_name} at {2*block_size} bytes")
         self.device.write_block(0, data[:block_size])
         self.device.write_block(1, data[block_size:2*block_size])
 
-    def glob_paths(self, paths: List[str]) -> List[FileEntry]:
-        entries = []
+    def glob_paths(self, paths: list[str]) -> list[FileEntry]:
+        entries: list[FileEntry] = []
         uniq = {p.strip('/') for p in paths}
         root = self.root
         for p in uniq:

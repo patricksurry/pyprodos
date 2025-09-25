@@ -4,3 +4,31 @@ requires = [
     "wheel"
 ]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyprodos"
+version = "0.0.1"
+requires-python = ">=3.11"
+authors = [
+    {name = "Patrick Surry", email = "patrick.surry@gmail.com" }
+]
+description = "Python implementation of Apple ProDOS 8 file system"
+readme = "README.md"
+keywords = ["prodos", "filesystem"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "bitarray>=3.7.1",
+    "pytest>=8.4.2",
+    "typer>=0.19.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/patricksurry/pyprodos"
+Issues = "https://github.com/patricksurry/pyprodos/issues"
+
+[project.scripts]
+prodos = "p8cli:app"
