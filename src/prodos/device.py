@@ -5,6 +5,7 @@ from mmap import mmap, ACCESS_READ, ACCESS_WRITE
 from os import path
 import struct
 from enum import Enum
+from pathlib import Path
 
 from .globals import block_size, block_size_bits
 from .blocks import AbstractBlock, BitmapBlock
@@ -15,6 +16,9 @@ class DeviceFormat(str, Enum):
     two2mg = "2mg"
 
 
+DeviceMode = Literal['ro', 'rw']
+
+
 BlockT = TypeVar('BlockT', bound=AbstractBlock)
 AccessT = Literal['r', 'w', 'a', 'f']
 
@@ -22,18 +26,18 @@ AccessT = Literal['r', 'w', 'a', 'f']
 class BlockDevice:
     _struct_2mg = "<4s4sHHI48x"
 
-    def __init__(self, fname: str, mode: Literal['ro', 'rw']='ro', bit_map_pointer: Optional[int]=None):
-        self.fname = fname
+    def __init__(self, source: Path, mode: DeviceMode='ro', bit_map_pointer: Optional[int]=None):
+        self.source = source
         access = ACCESS_WRITE if mode == 'rw' else ACCESS_READ
-        f = open(fname, 'r+b' if mode == 'rw' else 'rb', buffering=0)
+        f = open(source, 'r+b' if mode == 'rw' else 'rb', buffering=0)
         self.mm = mmap(f.fileno(), 0, access=access)
         #TODO mmap
         self.skip = 0
         self._access_log: list[tuple[AccessT, int]] = []
 
-        # see https://gswv.apple2.org.za/a2zine/Docs/DiskImage_2MG_Info.txt
-        if path.splitext(fname)[1].lower() == '.2mg':
-
+        if source.suffix.lower() == '.2mg':
+            # 2mg files contain a 64 byte header before the volume data
+            # see https://gswv.apple2.org.za/a2zine/Docs/DiskImage_2MG_Info.txt
             (
                 ident,
                 creator,    # type: ignore  # not currently used
@@ -47,7 +51,7 @@ class BlockDevice:
         n = len(self.mm)
         n -= self.skip
         assert n & (block_size - 1) == 0,\
-            f"BlockDevice: Expected volume {fname} size {n} excluding {self.skip} byte prefix to be multiple of {block_size} bytes"
+            f"BlockDevice: Expected volume {source} size {n} excluding {self.skip} byte prefix to be multiple of {block_size} bytes"
         self.total_blocks = n >> block_size_bits
 
         self.bit_map_pointer = bit_map_pointer     # updated via set_free_map below
@@ -64,11 +68,11 @@ class BlockDevice:
 
     def __repr__(self):
         used = 1 - self.blocks_free/self.total_blocks
-        return f"BlockDevice on {self.fname} contains {self.total_blocks} total blocks, {self.blocks_free} free ({used:.0%} used)"
+        return f"BlockDevice on {self.source} contains {self.total_blocks} total blocks, {self.blocks_free} free ({used:.0%} used)"
 
     @classmethod
     def create(cls,
-            fname: str,
+            dest: Path,
             total_blocks: int,
             bit_map_pointer: int,
             format: DeviceFormat = DeviceFormat.prodos,
@@ -78,9 +82,9 @@ class BlockDevice:
         else:
             prefix = bytes()
 
-        assert not path.exists(fname), f"Device.create: {fname} already exists!"
-        open(fname, 'wb').write(prefix + bytes([0]*total_blocks*block_size))
-        return BlockDevice(fname, mode='rw', bit_map_pointer=bit_map_pointer)
+        assert not path.exists(dest), f"Device.create: {dest} already exists!"
+        open(dest, 'wb').write(prefix + bytes([0]*total_blocks*block_size))
+        return BlockDevice(dest, mode='rw', bit_map_pointer=bit_map_pointer)
 
     @property
     def blocks_free(self) -> int:
@@ -89,7 +93,7 @@ class BlockDevice:
     def mark_session(self) -> int:
         return len(self._access_log)
 
-    def get_access_log(self, access_types: str, mark: int=0):
+    def get_access_log(self, access_types: str, mark: int=0) -> list[int]:
         return [i for (t, i) in self._access_log[mark:] if t in access_types]
 
     def dump_access_log(self):

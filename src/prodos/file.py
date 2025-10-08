@@ -1,5 +1,7 @@
 from typing import Self
 import logging
+import re
+import string
 from dataclasses import dataclass, field
 
 from .globals import block_size_bits, block_size
@@ -9,8 +11,47 @@ from .device import BlockDevice
 from .p8datetime import P8DateTime
 
 
+def legal_path(path: str) -> str:
+    return '/'.join([
+        ('' if (part+'A')[0] in string.ascii_uppercase else 'A') +
+        re.sub(r'[^./A-Z0-9]', '.', part)
+        for part in path.upper().split('/')
+    ])
+
+
 @dataclass(kw_only=True)
 class SimpleFile:
+    """
+    B.3.7 - Locating a Byte in a File
+
+    Byte #        Byte 2             Byte 1            Byte 0
+
+    bit #      7             0   7             0   7             0
+            +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
+    MARK      |Index Number |Data Block Number|   Byte of Block   |
+            +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
+    Used by:    Tree only    Tree and sapling      All three
+
+
+    Figure B-9. A Sparse File
+
+    Nil (0) block pointers represent blocks of zeros without allocating storage.
+
+                       0 1 2
+      key_pointer --> +--------------+
+            Key_Block | | | |        |
+                      +--------------+
+                      |   |
+            +---------+   +-------+                           EOF = $4000
+            |                     |                                     |
+            v Block $0   Block $1 v Block $2   Block $3       Block $1F v
+       Data +-------------------------------------------+   +-----------+
+     Blocks |          |  (nil)   |     | |  |  (nil)   |   |   (nil)   |
+            +-------------------------------------------+   +-----------+
+           $0         $1FF       $400    ^  $5FF
+                                         |
+                          Bytes $565..$568
+    """
     device: BlockDevice
     file_name: str
     file_type: int = 0xff        #TODO needed for system file boot

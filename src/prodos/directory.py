@@ -50,22 +50,28 @@ class Directory:
         if self.header.file_count != active_count:
             logging.warning(f"Directory file_count {self.header.file_count} != {active_count} active entries")
 
-    def file_glob(self, pattern: str) -> list[FileEntry]:
+    def file_entry(self, name: str) -> FileEntry | None:
+        entries = self.glob_file(name)
+        if len(entries) > 1:
+            raise ValueError("file_entry: globbing not supported")
+        return entries[0] if entries else None
+
+    def glob_file(self, pattern: str) -> list[FileEntry]:
         return [
-            e for e in self.entries if e.is_active and fnmatch(e.file_name, pattern)
+            e for e in self.entries if e.is_active and fnmatch(e.file_name, pattern.upper())
         ]
 
-    def path_glob(self, patterns: list[str]) -> list[FileEntry]:
-        pattern = patterns.pop(0)
+    def glob_path(self, parts: list[str]) -> list[FileEntry]:
+        pattern = parts.pop(0)
 
-        entries = self.file_glob(pattern)
+        entries = self.glob_file(pattern)
 
-        if not patterns:
+        if not parts:
             return entries
 
         return sum(
             (
-                Directory.read(self.device, e.key_pointer).path_glob(patterns)
+                Directory.read(self.device, e.key_pointer).glob_path(parts)
                 for e in entries
                 if e.is_dir
             ),
@@ -96,7 +102,7 @@ class Directory:
         f.remove()
 
     def write_simple_file(self, f: SimpleFile):
-        entries = self.file_glob(f.file_name)
+        entries = self.glob_file(f.file_name)
         assert len(entries) < 2, f"Directory.write_simple_file {f.file_name} matched multiple entries!"
         if entries:
             self.remove_simple_file(entries[0])

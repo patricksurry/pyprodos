@@ -1,9 +1,10 @@
-from typing import Literal, Self
+from typing import Self
+from pathlib import Path
 import logging
 
 from .globals import volume_key_block, volume_directory_length, \
     block_size, entries_per_block
-from .device import BlockDevice, DeviceFormat
+from .device import BlockDevice, DeviceFormat, DeviceMode
 from .metadata import P8DateTime, FileEntry, VolumeDirectoryHeaderEntry, \
     access_byte, StorageType
 from .blocks import DirectoryBlock
@@ -34,18 +35,18 @@ class Volume:
         self.device.reset_free_map(vh.bit_map_pointer)
 
     @classmethod
-    def from_file(cls, file_name: str, mode: Literal['ro', 'rw']='ro') -> Self:
-        return cls(BlockDevice(file_name, mode))
+    def from_file(cls, source: Path, mode: DeviceMode='ro') -> Self:
+        return cls(BlockDevice(source, mode))
 
     @classmethod
     def create(cls,
-            file_name: str,
+            dest: Path,
             volume_name: str = 'PYP8',
             total_blocks: int = 65535,
             format: DeviceFormat = DeviceFormat.prodos,
             loader_file_name: str = ''
         ) -> Self:
-        device = BlockDevice.create(file_name, total_blocks, bit_map_pointer=6, format=format)
+        device = BlockDevice.create(dest, total_blocks, bit_map_pointer=6, format=format)
         # reserve two blocks for loader
         device.allocate_block()
         device.allocate_block()
@@ -97,6 +98,12 @@ class Volume:
         self.device.write_block(0, data[:block_size])
         self.device.write_block(1, data[block_size:2*block_size])
 
+    def path_entry(self, path: str) -> FileEntry|None:
+        entries = self.glob_paths([path])
+        if len(entries) > 1:
+            raise ValueError("path_entry: globbing not supported")
+        return entries[0] if entries else None
+
     def glob_paths(self, paths: list[str]) -> list[FileEntry]:
         entries: list[FileEntry] = []
         uniq = {p.strip('/') for p in paths}
@@ -105,6 +112,6 @@ class Volume:
             if not p:
                 entries.append(FileEntry.root)
             else:
-                entries += root.path_glob(p.split('/'))
+                entries += root.glob_path(p.split('/'))
         return entries
 

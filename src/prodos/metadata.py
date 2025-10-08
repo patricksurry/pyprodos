@@ -215,8 +215,8 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
           |                            | $13
           |----------------------------|
           |                            | $14
-          /                            /
-  8 bytes /          reserved          /
+          /                            /        Allegedly should be magic bytes:
+  8 bytes /          reserved          /        $75 $23 $00 $c3 $27 $0d $00
           |                            | $1B
           |----------------------------|
           |                            | $1C
@@ -224,23 +224,23 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
   4 bytes |        date & time         | $1D
           |                            | $1F
           |----------------------------|
-  1 byte  |          version           | $20
+  1 byte  |          version           | $20    ProDOS version that initialized volume
           |----------------------------|
   1 byte  |        min_version         | $21
           |----------------------------|
   1 byte  |           access           | $22
           |----------------------------|
-  1 byte  |        entry_length        | $23
+  1 byte  |        entry_length        | $23    $27, all headers are this size
           |----------------------------|
-  1 byte  |     entries_per_block      | $24
+  1 byte  |     entries_per_block      | $24    $0D, all blocks have this many entries
           |----------------------------|
-          |                            | $25
+          |                            | $25    Count of active files in this directory
   2 bytes |         file_count         | $26
           |----------------------------|
-          |                            | $27
-  2 bytes |      bit_map_pointer       | $28
+          |                            | $27    First block in volume bitmap
+  2 bytes |      bit_map_pointer       | $28    (little endian)
           |----------------------------|
-          |                            | $29
+          |                            | $29    Total blocks on volume
   2 bytes |        total_blocks        | $2A
           +----------------------------+
     """
@@ -286,8 +286,8 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
     1 byte  | storage_type | name_length | $04
             |----------------------------|
             |                            | $05
-            /                            /
-    15 bytes /         file_name          /
+            /                            /          Up to 15 characters long (see name_length)
+   15 bytes /         file_name          /          containing A-Z, 0-9, and period.
             |                            | $13
             |----------------------------|
             |                            | $14
@@ -313,12 +313,12 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
             |                            | $25
     2 bytes |         file_count         | $26
             |----------------------------|
-            |                            | $27
-    2 bytes |       parent_pointer       | $28
+            |                            | $27      Block address of parent directory
+    2 bytes |       parent_pointer       | $28      (little endian)
             |----------------------------|
-    1 byte  |    parent_entry_number     | $29
+    1 byte  |    parent_entry_number     | $29      This directory's entry in parent
             |----------------------------|
-    1 byte  |    parent_entry_length     | $2A
+    1 byte  |    parent_entry_length     | $2A      $27
             +----------------------------+
     """
     SIZE: ClassVar = DirectoryHeaderEntry.SIZE + 4
@@ -371,19 +371,19 @@ class FileEntry(NamedEntry):
             |----------------------------|
             |                            | $01
             /                            /
-    15 bytes /         file_name          /
+   15 bytes /         file_name          /
             |                            | $0F
             |----------------------------|
     1 byte  |         file_type          | $10
             |----------------------------|
-            |                            | $11
-    2 bytes |        key_pointer         | $12
+            |                            | $11      First block of file
+    2 bytes |        key_pointer         | $12      (master/index/data for tree/sapling/seedling)
             |----------------------------|
-            |                            | $13
+            |                            | $13      Blocks occupied including index blocks
     2 bytes |        blocks_used         | $14
             |----------------------------|
-            |                            | $15
-    3 bytes |            EOF             |
+            |                            | $15      Total readable bytes
+    3 bytes |            EOF             |          in little endian order (lo med hi)
             |                            | $17
             |----------------------------|
             |                            | $18
@@ -397,15 +397,15 @@ class FileEntry(NamedEntry):
             |----------------------------|
     1 byte  |           access           | $1E
             |----------------------------|
-            |                            | $1F
-    2 bytes |          aux_type          | $20
+            |                            | $1F      File-type dependent metadata,
+    2 bytes |          aux_type          | $20      e.g. binary load address
             |----------------------------|
             |                            | $21
             |                            |
     4 bytes |          last mod          |
             |                            | $24
             |----------------------------|
-            |                            | $25
+            |                            | $25      Key block of directory containing this entry
     2 bytes |       header_pointer       | $26
             +----------------------------+
 
