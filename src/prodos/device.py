@@ -13,7 +13,7 @@ from .blocks import AbstractBlock, BitmapBlock
 
 class DeviceFormat(str, Enum):
     prodos = "prodos"
-    two2mg = "2mg"
+    twomg = "2mg"
 
 
 DeviceMode = Literal['ro', 'rw']
@@ -77,7 +77,7 @@ class BlockDevice:
             bit_map_pointer: int,
             format: DeviceFormat = DeviceFormat.prodos,
         ):
-        if format == '2mg':
+        if format == DeviceFormat.twomg:
             prefix = struct.pack(cls._struct_2mg, b'2IMG', b'PYP8', 64, 1, 1)
         else:
             prefix = bytes()

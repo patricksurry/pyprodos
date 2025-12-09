@@ -44,7 +44,7 @@ class Volume:
             volume_name: str = 'PYP8',
             total_blocks: int = 65535,
             format: DeviceFormat = DeviceFormat.prodos,
-            loader_file_name: str = ''
+            loader_path: Path | None = None
         ) -> Self:
         device = BlockDevice.create(dest, total_blocks, bit_map_pointer=6, format=format)
         # reserve two blocks for loader
@@ -68,8 +68,8 @@ class Volume:
         ).write()
         device.write_free_map()
         volume = cls(device)
-        if loader_file_name:
-            volume.write_loader(loader_file_name)
+        if loader_path is not None:
+            volume.write_loader(loader_path)
         return volume
 
     def __repr__(self):
@@ -91,10 +91,13 @@ class Volume:
     def read_simple_file(self, entry: FileEntry) -> SimpleFile:
         return SimpleFile.from_entry(self.device, entry)
 
-    def write_loader(self, loader_file_name: str):
-        data = open(loader_file_name, 'rb').read()
+    def write_loader(self, loader_path: Path):
+        data = open(loader_path, 'rb').read()
         if len(data) > 2 * block_size:
-            logging.warning(f"Volume.write_loader truncating {loader_file_name} at {2*block_size} bytes")
+            logging.warning(f"Volume.write_loader truncating {loader_path} at {2*block_size} bytes")
+        elif len(data) < 2 * block_size:
+            logging.info(f"Volume.write_loader padding {loader_path} to {2*block_size} bytes")
+            data += bytes(2*block_size-len(data))
         self.device.write_block(0, data[:block_size])
         self.device.write_block(1, data[block_size:2*block_size])
 

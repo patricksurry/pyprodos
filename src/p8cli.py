@@ -4,6 +4,7 @@ import typer
 from typer import Option, Argument
 from typer_di import TyperDI, Depends
 import shutil
+import os
 from os import path
 from pathlib import Path
 
@@ -15,6 +16,12 @@ from prodos.file import SimpleFile, legal_path
 logging.basicConfig(level=logging.WARN)
 
 app = TyperDI()
+
+def get_force(force: Annotated[bool, typer.Option("--force", "-f")] = False):
+    return force
+
+def get_recursive(recursive: Annotated[bool, typer.Option("--recursive", "-r")] = False):
+    return recursive
 
 def get_path(path: Annotated[str, Argument]) -> str:
     return path
@@ -44,18 +51,27 @@ def create(
         size: int = 65535,
         name: str = 'PYP8',
         format: DeviceFormat = DeviceFormat.prodos,
-        loader: str = '',       #TODO path
-        #TODO force
+        loader: Path | None = None,
+        force: bool = Depends(get_force),
     ):
     """
     Create an empty volume with BLOCKS total blocks (512 bytes/block)
     """
+    if path.splitext(dest)[1].upper() == '.' + DeviceFormat.twomg.value.upper():
+        format = DeviceFormat.twomg
+
+    if path.exists(dest):
+        if not force:
+            print(f"Destination {dest} exists, use --force to override")
+            raise typer.Exit(5)
+        os.remove(dest)
+
     Volume.create(
         dest=dest,
         volume_name=name,
         total_blocks=size,
         format=format,
-        loader_file_name=loader
+        loader_path=loader,
     )
 
 
@@ -72,10 +88,16 @@ def check(source: Path = Depends(get_volume_path),):
     """
     TODO Perform various volume integrity checks
 
+    - validate parent_entry_number and parent_pointer for subdir header
+    - validate header_pointer for file entry
+
     - check boot blocks, vol dir, block map marked used
     - volume total blocks matches volume size
-    - walk and read every file, check file type
-    - check file blocks used
+    - recurse all files and directories
+        - check known file type
+        - read every file,
+        - check file blocks used matches visited
+        - check rest of index blocks are zero(?)
     - warn if read block not marked active
     - warn if used blocks not accessed
     """
@@ -90,6 +112,7 @@ def default_path(paths: Optional[list[str]]) -> list[str]:
 def ls(
         source: Path = Depends(get_volume_path),
         paths: list[str] = Depends(get_optional_paths),
+        recursive: bool = Depends(get_recursive),
     ):
     """
     Show volume listing for path like `/some/directory/some/file`
@@ -106,9 +129,13 @@ def ls(
         print("No matching files found")
         raise typer.Exit(1)
 
-    for e in entries:
+    while entries:
+        e = entries.pop(0)
         if e.is_dir:
-            print(volume.read_directory(e))
+            dir = volume.read_directory(e)
+            print(dir)
+            if recursive:
+                entries += [e for e in dir.entries if e.is_dir]
         else:
             print(e)
         print()
@@ -122,9 +149,11 @@ def cp(
         output: Path|None = Depends(get_output),
         ):
     """
-    TODO Copy SOURCE to DEST, or multiple SOURCE(s) to DIRECTORY
+    TODO not implemented
+
+    Copy single file to target file, or one or more files to target directory.
+    Directories are not copied: use globbing to expand as file lists.
     """
-    #TODO: glob rules and DST dir or target
 
     print("TODO: cp")
     volume = open_volume(source, output, mode='rw')
@@ -189,7 +218,7 @@ def host_import(
         src: list[str] = Depends(get_paths),
         dst: str = Depends(get_path),
         output: Path|None = Depends(get_output),
-        force: bool = False
+        force: bool = Depends(get_force),
     ):
     """
     Import host files to volume.
@@ -223,7 +252,8 @@ def host_import(
 
     for fname in src:
         name = legal_path(renamed or path.basename(fname))
-        if renamed and (entry := dir.file_entry(name)):
+        entry = dir.file_entry(name)
+        if entry:
             if entry.is_dir:
                 print(f"Target {name} is a directory")
                 raise typer.Exit(4)

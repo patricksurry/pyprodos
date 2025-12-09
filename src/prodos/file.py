@@ -14,7 +14,7 @@ from .p8datetime import P8DateTime
 def legal_path(path: str) -> str:
     return '/'.join([
         ('' if (part+'A')[0] in string.ascii_uppercase else 'A') +
-        re.sub(r'[^./A-Z0-9]', '.', part)
+        re.sub(r'[^./A-Z0-9]', '0', part)
         for part in path.upper().split('/')
     ])
 
@@ -27,9 +27,9 @@ class SimpleFile:
     Byte #        Byte 2             Byte 1            Byte 0
 
     bit #      7             0   7             0   7             0
-            +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
+              +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
     MARK      |Index Number |Data Block Number|   Byte of Block   |
-            +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
+              +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+ +-+-+-+-+-+-+-+-+
     Used by:    Tree only    Tree and sapling      All three
 
 
