@@ -8,8 +8,8 @@ from .device import BlockDevice, DeviceFormat, DeviceMode
 from .metadata import P8DateTime, FileEntry, VolumeDirectoryHeaderEntry, \
     access_byte, StorageType
 from .blocks import DirectoryBlock
-from .directory import Directory
-from .file import SimpleFile
+from .directory import DirectoryFile
+from .file import PlainFile
 
 
 class Volume:
@@ -50,12 +50,12 @@ class Volume:
         # reserve two blocks for loader
         device.allocate_block()
         device.allocate_block()
-        Directory(
+        DirectoryFile(
             device=device,
             header=VolumeDirectoryHeaderEntry(
-                storage_type = StorageType.voldir,
+                storage_type = StorageType.voldirhdr,
                 file_name = volume_name.upper(),
-                date_time = P8DateTime.now(),
+                created = P8DateTime.now(),
                 version = 0,
                 min_version = 0,
                 access = access_byte(),
@@ -63,6 +63,7 @@ class Volume:
                 bit_map_pointer = 6,
                 total_blocks = total_blocks,
             ),
+            file_name = volume_name.upper(), #TODO
             entries=[FileEntry.empty] * (4 * entries_per_block - 1),
             block_list=list(range(volume_key_block, volume_key_block + volume_directory_length))
         ).write()
@@ -74,22 +75,22 @@ class Volume:
 
     def __repr__(self):
         h = self.root.header
-        return f"Volume {h.file_name} {h.date_time}\n" + repr(self.device)
+        return f"Volume {h.file_name} {h.created}\n" + repr(self.device)
 
     @property
-    def root(self) -> Directory:
+    def root(self) -> DirectoryFile:
         return self.read_directory(FileEntry.root)
 
-    def parent_directory(self, entry: FileEntry) -> Directory:
+    def parent_directory(self, entry: FileEntry) -> DirectoryFile:
         assert entry.header_pointer >= 2, f"parent_directory: bad header_pointer {entry.header_pointer}"
-        return Directory.read(self.device, entry.header_pointer)
+        return DirectoryFile.read(self.device, entry.header_pointer)
 
-    def read_directory(self, dir_entry: FileEntry) -> Directory:
+    def read_directory(self, dir_entry: FileEntry) -> DirectoryFile:
         assert dir_entry.is_dir, f"read_directory: not a directory {dir_entry}"
-        return Directory.read(self.device, dir_entry.key_pointer)
+        return DirectoryFile.read(self.device, dir_entry.key_pointer)
 
-    def read_simple_file(self, entry: FileEntry) -> SimpleFile:
-        return SimpleFile.from_entry(self.device, entry)
+    def read_simple_file(self, entry: FileEntry) -> PlainFile:
+        return PlainFile.from_entry(self.device, entry)
 
     def write_loader(self, loader_path: Path):
         data = open(loader_path, 'rb').read()

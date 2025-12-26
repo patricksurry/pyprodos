@@ -6,7 +6,7 @@ import logging
 
 from .globals import entry_length, entries_per_block, block_size
 from .metadata import FileEntry, NamedEntry, StorageType, \
-    DirectoryHeaderEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry
+    DirectoryEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry
 
 
 @dataclass(kw_only=True)
@@ -23,14 +23,14 @@ class AbstractBlock:
 class DirectoryBlock(AbstractBlock):
     SIZE: ClassVar = 4
     _struct: str = "<HH"
-    _header_factory: ClassVar[dict[StorageType, type[DirectoryHeaderEntry]]] = {
-        StorageType.voldir: VolumeDirectoryHeaderEntry,
-        StorageType.subdir: SubdirectoryHeaderEntry
+    _header_factory: ClassVar[dict[StorageType, type[DirectoryEntry]]] = {
+        StorageType.voldirhdr: VolumeDirectoryHeaderEntry,
+        StorageType.subdirhdr: SubdirectoryHeaderEntry
     }
 
     prev_pointer: int
     next_pointer: int
-    header_entry: Optional[DirectoryHeaderEntry] = None
+    header_entry: Optional[DirectoryEntry] = None
     file_entries: list[FileEntry]
 
     def __repr__(self):
@@ -59,7 +59,7 @@ class DirectoryBlock(AbstractBlock):
         ) = struct.unpack(cls._struct, buf[:offset])
         # check the start of the first entry to see if it's a header entry
         d = NamedEntry.unpack(buf[offset:offset + NamedEntry.SIZE])
-        header: Optional[DirectoryHeaderEntry] = None
+        header: Optional[DirectoryEntry] = None
         header_factory = cls._header_factory.get(d.storage_type)
         if header_factory:
             header = header_factory.unpack(buf[offset:offset + entry_length])

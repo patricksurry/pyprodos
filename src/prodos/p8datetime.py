@@ -55,14 +55,14 @@ class P8DateTime:
         )
 
     @classmethod
-    def from_datetime(cls, dt: datetime):
-        return P8DateTime(
+    def from_datetime(cls, dt: datetime) -> Self:
+        return cls(
             year=dt.year%100, month=dt.month, day=dt.day,
             hour=dt.hour, minute=dt.minute
         )
 
     @classmethod
-    def now(cls):
-        return P8DateTime.from_datetime(datetime.now())
+    def now(cls) -> Self:
+        return cls.from_datetime(datetime.now())
 
 P8DateTime.empty = P8DateTime(year=0, month=0, day=0, hour=0, minute=0)

@@ -3,16 +3,16 @@ from dataclasses import dataclass, field
 import logging
 from fnmatch import fnmatch
 
-from .globals import entries_per_block
-from .metadata import FileEntry, DirectoryHeaderEntry, VolumeDirectoryHeaderEntry
+from .globals import entries_per_block, block_size
+from .metadata import FileEntry, DirectoryEntry, VolumeDirectoryHeaderEntry, \
+    StorageType, SubdirectoryHeaderEntry
 from .blocks import DirectoryBlock
 from .device import BlockDevice
-from .file import SimpleFile
-from .p8datetime import P8DateTime
+from .file import PlainFile, FileBase
 
 
 @dataclass(kw_only=True)
-class Directory:
+class DirectoryFile(FileBase):
     r"""
     Figure B-2. Directory File Format
 
@@ -36,10 +36,8 @@ class Directory:
             |  |Unused |    |Unused |   ...   |Unused |
              \ +-------+    +-------+         +-------+
     """
-    device: BlockDevice
-    header: DirectoryHeaderEntry
-    entries: list[FileEntry]
-    block_list: list[int] = field(default_factory=list[int])
+    header: DirectoryEntry
+    entries: list[FileEntry] = field(default_factory=list[FileEntry])
 
     def __repr__(self):
         s = '\n'.join([repr(e) for e in self.entries if e.is_active])
@@ -49,6 +47,21 @@ class Directory:
         active_count = len([e for e in self.entries if e.is_active])
         if self.header.file_count != active_count:
             logging.warning(f"Directory file_count {self.header.file_count} != {active_count} active entries")
+        self.pad_entries()
+
+    @property
+    def file_size(self) -> int:
+        return len(self.block_list) * block_size
+
+    @property
+    def storage_type(self) -> StorageType:
+        return StorageType.dir
+
+    def pad_entries(self):
+        # pad to multiple of entries_per_block, with header
+        pad = -(len(self.entries)+1) % entries_per_block
+        self.entries += [FileEntry.empty] * pad
+        assert (len(self.entries) + 1) % entries_per_block == 0
 
     def file_entry(self, name: str) -> FileEntry | None:
         entries = self.glob_file(name)
@@ -71,52 +84,90 @@ class Directory:
 
         return sum(
             (
-                Directory.read(self.device, e.key_pointer).glob_path(parts)
+                DirectoryFile.read(self.device, e.key_pointer).glob_path(parts)
                 for e in entries
                 if e.is_dir
             ),
             cast(list[FileEntry], [])
         )
 
-    def add_entry(self, entry: FileEntry):
+    def free_entry(self) -> int:
         i = next((i for i, e in enumerate(self.entries) if not e.is_active), None)
         if i is None:
             i = len(self.entries)
             self.entries += [FileEntry.empty] * entries_per_block
+        return i
+
+    def write_entry(self, i: int, entry: FileEntry):
         self.entries[i] = entry
-        self.header.file_count += 1
-        self.header.date_time = P8DateTime.now()
         self.write()
 
+    def add_entry(self, entry: FileEntry):
+        self.write_entry(self.free_entry(), entry)
+
     def remove_entry(self, entry: FileEntry):
+        #TODO test for directory
         i = next((i for i, e in enumerate(self.entries) if e == entry), None)
         assert i is not None, f"Directory.remove_entry {entry} not found in {self}"
         self.entries[i] = FileEntry.empty
-        self.header.file_count -= 1
-        self.header.date_time = P8DateTime.now()
         self.write()
 
     def remove_simple_file(self, entry: FileEntry):
+        assert entry.is_plain_file, f"Directory.remove_simple_file: not simple file {entry}"
         self.remove_entry(entry)
-        f = SimpleFile.from_entry(self.device, entry)
+        f = PlainFile.from_entry(self.device, entry)
         f.remove()
 
-    def write_simple_file(self, f: SimpleFile):
+    def add_simple_file(self, f: PlainFile):
         entries = self.glob_file(f.file_name)
-        assert len(entries) < 2, f"Directory.write_simple_file {f.file_name} matched multiple entries!"
+        assert len(entries) < 2, f"Directory.add_simple_file {f.file_name} matched multiple entries!"
         if entries:
             self.remove_simple_file(entries[0])
         f.write()
-        self.add_entry(f.create_entry(self.block_list[0]))
+        self.add_entry(f.entry(self.block_list[0]))
 
-    def write(self):
+    def remove_directory(self, entry: FileEntry):
+        assert entry.is_dir, f"Directory.remove_directory: not directory {entry}"
+        dir = self.read(self.device, entry.key_pointer)
+        assert dir.header.file_count == 0, f"Directory.remove_directory: directory not empty {entry}"
+        self.remove_entry(entry)
+        dir.remove()
+
+    def add_directory(self, file_name: str):
+        entries = self.glob_file(file_name)
+        assert len(entries) == 0, f"Directory.add_directory {file_name} already exists!"
+
+        i = self.free_entry()
+
+        subdir = self.__class__(
+            device=self.device,
+            header=SubdirectoryHeaderEntry(
+                storage_type=StorageType.subdirhdr,
+                file_name=file_name,
+                parent_pointer=self.block_list[0],
+                parent_entry_number=i
+            ),
+            file_name=file_name,  #TODO
+            entries=[]
+        )
+        subdir.write()
+
+        entry = subdir.entry(self.block_list[0])
+        self.write_entry(i, entry)
+
+    def remove(self):
+        assert self.header.file_count == 0, f"Directory.remove: directory not empty {self}"
+        super().remove()
+
+    def write(self, compact: bool=True):
         assert (len(self.entries) + 1) % entries_per_block == 0, \
             f"Directory: header plus {len(self.entries)} entries isn't a multiple of {entries_per_block}"
 
-        # shrink if not root
-        if not isinstance(self.header, VolumeDirectoryHeaderEntry):
-            while all(e == FileEntry.empty for e in self.entries[-entries_per_block:]):
-                self.entries = self.entries[:entries_per_block]
+        # root directory is fixed size
+        if compact and not isinstance(self.header, VolumeDirectoryHeaderEntry):
+            # keep all non-empty entries in the same order
+            self.entries = [ e for e in self.entries if e != FileEntry.empty]
+            self.pad_entries()
 
         n = (len(self.entries) + 1) // entries_per_block
         while len(self.block_list) > n:
@@ -124,9 +175,10 @@ class Directory:
         while len(self.block_list) < n:
             self.block_list.append(self.device.allocate_block())
 
+        self.header.file_count = sum(e.is_active for e in self.entries)
         offset = entries_per_block-1
         key = DirectoryBlock(
-            prev_pointer=0, next_pointer=self.block_list[1],
+            prev_pointer=0, next_pointer=self.block_list[1] if n > 1 else 0,
             header_entry=self.header,
             file_entries=self.entries[:offset]
         )
@@ -146,7 +198,7 @@ class Directory:
         entries: list[FileEntry] = []
         prev = 0
         mark = device.mark_session()
-        header: Optional[DirectoryHeaderEntry] = None
+        header: Optional[DirectoryEntry] = None
         while True:
             data = device.read_block(block_index)
             db = DirectoryBlock.unpack(data)
@@ -169,7 +221,6 @@ class Directory:
             device=device,
             header=header,
             entries=entries,
-            block_list=device.get_access_log('r', mark)
+            block_list=device.get_access_log('r', mark),
+            file_name=header.file_name,
         )
-
-

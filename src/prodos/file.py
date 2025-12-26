@@ -20,7 +20,49 @@ def legal_path(path: str) -> str:
 
 
 @dataclass(kw_only=True)
-class SimpleFile:
+class FileBase:
+    device: BlockDevice
+    file_name: str
+    file_type: int = 0xff       #TODO needed for system file boot
+    block_list: list[int] = field(default_factory=list[int])
+    version: int = 0            #TODO populate from header
+    min_version: int = 0
+    created: P8DateTime = field(default_factory=P8DateTime.now)
+
+    @property
+    def storage_type(self) -> StorageType:
+        ...
+
+    @property
+    def file_size(self) -> int:
+        ...
+
+    def entry(self, header_pointer: int) -> FileEntry:
+        """Create the file entry metadata for this file, to appear in a DirectoryFile"""
+        return FileEntry(
+            storage_type = self.storage_type,
+            file_name = self.file_name,
+            file_type = self.file_type,
+            key_pointer = self.block_list[0],
+            blocks_used = len(self.block_list),
+            eof = self.file_size,
+            created = self.created,
+            version = self.version,
+            min_version = self.min_version,
+            access = access_byte(),
+            aux_type = 0,
+            last_mod = P8DateTime.now(),
+            header_pointer = header_pointer,
+        )
+
+    def remove(self):
+        assert self.block_list, "FileBase.remove: can't remove unmapped file"
+        while self.block_list:
+            self.device.free_block(self.block_list.pop())
+
+
+@dataclass(kw_only=True)
+class PlainFile(FileBase):
     """
     B.3.7 - Locating a Byte in a File
 
@@ -52,44 +94,24 @@ class SimpleFile:
                                          |
                           Bytes $565..$568
     """
-    device: BlockDevice
-    file_name: str
-    file_type: int = 0xff        #TODO needed for system file boot
     data: bytes
-    block_list: list[int] = field(default_factory=list[int])
 
     def export(self, dst: str):
         open(dst, 'wb').write(self.data)
 
-    def create_entry(self, header_pointer: int) -> FileEntry:
-        n = len(self.data)
+    @property
+    def file_size(self) -> int:
+        return len(self.data)
+
+    @property
+    def storage_type(self) -> StorageType:
+        n = self.file_size
         if n <= block_size:
-            t = StorageType.seedling
+            return StorageType.seedling
         elif n <= block_size << 8:
-            t = StorageType.sapling
+            return StorageType.sapling
         else:
-            t = StorageType.tree
-
-        return FileEntry(
-            storage_type = t,
-            file_name = self.file_name,
-            file_type = self.file_type,
-            key_pointer = self.block_list[0],
-            blocks_used = len(self.block_list),
-            eof = n,
-            date_time = P8DateTime.now(),
-            version = 0,
-            min_version = 0,
-            access = access_byte(),
-            aux_type = 0,
-            last_mod = P8DateTime.now(),
-            header_pointer = header_pointer,
-        )
-
-    def remove(self):
-        assert self.block_list, "File.remove: can't remove unmapped file"
-        while self.block_list:
-            self.device.free_block(self.block_list.pop())
+            return StorageType.tree
 
     def write(self) -> int:
         """
@@ -144,7 +166,7 @@ class SimpleFile:
 
     @classmethod
     def from_entry(cls, device: BlockDevice, entry: FileEntry) -> Self:
-        assert entry.is_simple_file, f"File.from_entry: not simple file {entry}"
+        assert entry.is_plain_file, f"File.from_entry: not simple file {entry}"
         mark = device.mark_session()
         data = cls._read_simple_file(
             device,

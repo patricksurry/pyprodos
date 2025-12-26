@@ -1,5 +1,5 @@
 from typing import ClassVar, Self, Final, Protocol, Any
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, field
 from enum import IntEnum
 import struct
 import logging
@@ -54,14 +54,13 @@ class StorageType(IntEnum):
     sapling = 2
     tree = 3
     dir = 0xD
-    subdir = 0xE
-    voldir = 0xF
-
+    subdirhdr = 0xE
+    voldirhdr = 0xF
 
 directory_types = {
-    StorageType.dir,
-    StorageType.subdir,
-    StorageType.voldir,
+    StorageType.dir,            # directory file entry
+    StorageType.subdirhdr,      # subdirectory header
+    StorageType.voldirhdr,      # volume directory header
 }
 
 simple_file_types = {
@@ -100,7 +99,7 @@ class IsDataclass(Protocol):
 
 def shallow_dict(d: IsDataclass):
     """create a shallow dict for a dataclass, since asdict() breaks nested objs"""
-    return {field.name: getattr(d, field.name) for field in fields(d)}
+    return {f.name: getattr(d, f.name) for f in fields(d)}
 
 
 @dataclass(kw_only=True)
@@ -131,26 +130,31 @@ class NamedEntry:
 
 
 @dataclass(kw_only=True)
-class DirectoryHeaderEntry(NamedEntry):
+class DirectoryEntry(NamedEntry):
+    """Entry pointing to a DirectoryFile within a directory block"""
     SIZE: ClassVar = NamedEntry.SIZE + 19
     _struct: ClassVar = "<8s4s5BH"
 
+    #TODO
     # spec suggests there are magic bytes for VolumeDirectoryHeaderEntry
     # namely $75 $23 $00 $c3 $27 $0d $00 where $23 is version 2.3
+    # from source of ProDOS 8 V2.0.3      06-May-93
+    #   Pass        DB     $75
+    #   XDOSver     DB     $0,0,$C3,$27,$0D,0,0,0
     # but this doesn't seem to be the case in the wild
     reserved: bytes = bytes(8)
-    date_time: P8DateTime
-    version: int
-    min_version: int
-    access: int
+    created: P8DateTime = field(default_factory=P8DateTime.now)
+    version: int = 0
+    min_version: int = 0
+    access: int = access_byte()
     entry_length: int = entry_length
     entries_per_block: int = entries_per_block
-    file_count: int
+    file_count: int = 0
 
     def __repr__(self):
         flags = access_repr(self.access)
         typ = f"{self.storage_type:x}".upper()
-        return f"    {self.file_count:d} files in {self.file_name} {typ} {flags} {self.date_time}"
+        return f"    {self.file_count:d} files in {self.file_name} {typ} {flags} {self.created}"
 
     def __post_init___(self):
         assert self.entry_length == entry_length, \
@@ -160,9 +164,9 @@ class DirectoryHeaderEntry(NamedEntry):
 
     def pack(self) -> bytes:
         return super().pack() + struct.pack(
-            DirectoryHeaderEntry._struct,
+            DirectoryEntry._struct,
             self.reserved,
-            self.date_time.pack(),
+            self.created.pack(),
             self.version,
             self.min_version,
             self.access,
@@ -187,7 +191,7 @@ class DirectoryHeaderEntry(NamedEntry):
         ) = struct.unpack(cls._struct, buf[n:])
         return cls(
             reserved=reserved,
-            date_time=P8DateTime.unpack(dt),
+            created=P8DateTime.unpack(dt),
             version=version,
             min_version=min_version,
             access=access,
@@ -199,8 +203,11 @@ class DirectoryHeaderEntry(NamedEntry):
 
 
 @dataclass(kw_only=True, repr=False)
-class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
+class VolumeDirectoryHeaderEntry(DirectoryEntry):
     """
+    This is the first (header) entry in the volume directory,
+    which describes the volume itself.
+
     Figure B-3. The Volume Directory Header
 
 
@@ -244,7 +251,7 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
   2 bytes |        total_blocks        | $2A
           +----------------------------+
     """
-    SIZE: ClassVar = DirectoryHeaderEntry.SIZE + 4
+    SIZE: ClassVar = DirectoryEntry.SIZE + 4
     _struct: ClassVar = "<HH"
 
     bit_map_pointer: int        # first block of free map
@@ -259,9 +266,9 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
 
     @classmethod
     def unpack(cls, buf: bytes) -> Self:
-        n = DirectoryHeaderEntry.SIZE
-        d = DirectoryHeaderEntry.unpack(buf[:n])
-        assert d.storage_type == StorageType.voldir, \
+        n = DirectoryEntry.SIZE
+        d = DirectoryEntry.unpack(buf[:n])
+        assert d.storage_type == StorageType.voldirhdr, \
             f"VolumeDirectoryHeaderEntry bad storage type {d.storage_type:x}"
         (
             bit_map_pointer,
@@ -275,8 +282,11 @@ class VolumeDirectoryHeaderEntry(DirectoryHeaderEntry):
 
 
 @dataclass(kw_only=True, repr=False)
-class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
+class SubdirectoryHeaderEntry(DirectoryEntry):
     """
+    This is the first (header) entry in each sub directory,
+    which describes the directory contents.
+
     Figure B-4. The Subdirectory Header
 
 
@@ -321,7 +331,7 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
     1 byte  |    parent_entry_length     | $2A      $27
             +----------------------------+
     """
-    SIZE: ClassVar = DirectoryHeaderEntry.SIZE + 4
+    SIZE: ClassVar = DirectoryEntry.SIZE + 4
     _struct: ClassVar = "<HBB"
 
     parent_pointer: int         # key block of parent dir
@@ -342,9 +352,9 @@ class SubdirectoryHeaderEntry(DirectoryHeaderEntry):
 
     @classmethod
     def unpack(cls, buf: bytes) -> Self:
-        n = DirectoryHeaderEntry.SIZE
-        d = DirectoryHeaderEntry.unpack(buf[:n])
-        assert d.storage_type == StorageType.subdir, \
+        n = DirectoryEntry.SIZE
+        d = DirectoryEntry.unpack(buf[:n])
+        assert d.storage_type == StorageType.subdirhdr, \
             f"SubdirectoryHeaderEntry: bad storage type {d.storage_type:x}"
         (
             parent_pointer,
@@ -419,12 +429,12 @@ class FileEntry(NamedEntry):
     key_pointer: int        # pointer fo file key block
     blocks_used: int
     eof: int
-    date_time: P8DateTime
+    created: P8DateTime = field(default_factory=P8DateTime.now)
     version: int = 0
     min_version: int = 0
-    access: int
+    access: int = access_byte()
     aux_type: int = 0
-    last_mod: P8DateTime
+    last_mod: P8DateTime = field(default_factory=P8DateTime.now)
     header_pointer: int     # key block of directory owning this entry
 
     def __repr__(self):
@@ -433,7 +443,7 @@ class FileEntry(NamedEntry):
         name = self.file_name
         if self.is_dir:
             name += '/'
-        return f"{name:18s} {self.eof:>8d} {typ} {flags} {self.date_time} {self.last_mod} {self.blocks_used:d} @ {self.key_pointer}"
+        return f"{name:18s} {self.eof:>8d} {typ} {flags} {self.created} {self.last_mod} {self.blocks_used:d} @ {self.key_pointer}"
 
     @property
     def is_dir(self) -> bool:
@@ -441,10 +451,10 @@ class FileEntry(NamedEntry):
 
     @property
     def is_volume_dir(self) -> bool:
-        return self.storage_type == StorageType.voldir
+        return self.storage_type == StorageType.voldirhdr
 
     @property
-    def is_simple_file(self) -> bool:
+    def is_plain_file(self) -> bool:
         return self.storage_type in simple_file_types
 
     @property
@@ -458,7 +468,7 @@ class FileEntry(NamedEntry):
             self.blocks_used,
             self.eof & 0xffff,
             self.eof >> 16,
-            self.date_time.pack(),
+            self.created.pack(),
             self.version,
             self.min_version,
             self.access,
@@ -495,7 +505,7 @@ class FileEntry(NamedEntry):
             key_pointer=key_pointer,
             blocks_used=blocks_used,
             eof=eofw | (eof3 << 16),
-            date_time=P8DateTime.unpack(dt),
+            created=P8DateTime.unpack(dt),
             version=version,
             min_version=min_version,
             access=access,
@@ -513,7 +523,7 @@ FileEntry.empty = FileEntry(
     key_pointer = 0,
     blocks_used = 0,
     eof = 0,
-    date_time = P8DateTime.empty,
+    created = P8DateTime.empty,
     version = 0,
     min_version = 0,
     access = 0,
@@ -524,13 +534,13 @@ FileEntry.empty = FileEntry(
 
 # dummy record to indicate root directory
 FileEntry.root = FileEntry(
-    storage_type = StorageType.voldir,
+    storage_type = StorageType.voldirhdr,
     file_name = '/',
     file_type = 0xff,
     key_pointer = volume_key_block,
     blocks_used = volume_directory_length,
     eof = 0,
-    date_time = P8DateTime.empty,
+    created = P8DateTime.empty,
     version = 0,
     min_version = 0,
     access = 0,

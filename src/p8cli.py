@@ -10,7 +10,7 @@ from pathlib import Path
 
 from prodos.volume import Volume
 from prodos.device import DeviceFormat, DeviceMode
-from prodos.file import SimpleFile, legal_path
+from prodos.file import PlainFile, legal_path
 
 
 logging.basicConfig(level=logging.WARN)
@@ -190,7 +190,7 @@ def rm(
         raise typer.Exit(1)
 
     for e in entries:
-        if not e.is_simple_file:
+        if not e.is_plain_file:
             print(f"Not a simple file: {e.file_name}")
             raise typer.Exit(1)
 
@@ -200,16 +200,74 @@ def rm(
 
 
 @app.command()
+def mkdir(
+        source: Path = Depends(get_volume_path),
+        dst: str = Depends(get_path),
+        output: Path|None = Depends(get_output),
+):
+    """
+    Create empty directory at DST
+    """
+    volume = open_volume(source, output, mode='rw')
+
+    if '/' in dst:
+        parent_path, name = dst.rsplit('/', 1)
+        if not parent_path:
+            parent_path = '/'
+    else:
+        parent_path = '/'
+        name = dst
+
+    if not name:
+        print(f"Invalid directory name: {dst}")
+        raise typer.Exit(1)
+
+    parent_entry = volume.path_entry(parent_path)
+    if not parent_entry:
+        print(f"Parent directory not found: {parent_path}")
+        raise typer.Exit(1)
+
+    if not parent_entry.is_dir:
+        print(f"Parent is not a directory: {parent_path}")
+        raise typer.Exit(1)
+
+    parent_dir = volume.read_directory(parent_entry)
+
+    name = legal_path(name)
+    if parent_dir.file_entry(name):
+        print(f"Entry already exists: {name}")
+        raise typer.Exit(1)
+
+    parent_dir.add_directory(file_name=name)
+
+
+@app.command()
 def rmdir(
         source: Path = Depends(get_volume_path),
-        src: list[str] = Depends(get_paths),
+        src: str = Depends(get_path),
         output: Path|None = Depends(get_output),
     ):
     """
-    TODO Remove empty directory at SRC
+    Remove empty directory at SRC
     """
-    print("TODO: rmdir")
-    volume = open_volume(source, output)
+    volume = open_volume(source, output, mode='rw')
+
+    entry = volume.path_entry(src)
+    if not entry:
+        print(f"Directory not found: {src}")
+        raise typer.Exit(1)
+
+    if not entry.is_dir:
+        print(f"Not a directory: {src}")
+        raise typer.Exit(1)
+
+    directory = volume.read_directory(entry)
+    if directory.entries:
+        print(f"Directory not empty: {src}")
+        raise typer.Exit(1)
+
+    parent = volume.parent_directory(entry)
+    parent.remove_directory(entry)
 
 
 @app.command('import')
@@ -262,12 +320,12 @@ def host_import(
                 raise typer.Exit(5)
             else:
                 dir.remove_simple_file(entry)
-        f = SimpleFile(
+        f = PlainFile(
             device=volume.device,
             file_name=name,
             data=open(fname, 'rb').read()
         )
-        dir.write_simple_file(f)
+        dir.add_simple_file(f)
 
 
 @app.command('export')
@@ -300,5 +358,3 @@ def host_export(
 
 if __name__ == "__main__":
     app()
-
-
