@@ -151,7 +151,8 @@ def cp(
     """
     TODO not implemented
 
-    Copy single file to target file, or one or more files to target directory.
+    Copy single file (not directory) to target file,
+    or one or more files to target directory.
     Directories are not copied: use globbing to expand as file lists.
     """
 
@@ -167,7 +168,8 @@ def mv(
         output: Path|None = Depends(get_output),
     ):
     """
-    TODO Move from SRC to DST
+    TODO Move single file to target file,
+    or move one or more files (including directories) to target directory.
     """
     print("TODO: mv")
     volume = open_volume(source, output, mode='rw')
@@ -262,7 +264,7 @@ def rmdir(
         raise typer.Exit(1)
 
     directory = volume.read_directory(entry)
-    if directory.entries:
+    if not directory.is_empty:
         print(f"Directory not empty: {src}")
         raise typer.Exit(1)
 

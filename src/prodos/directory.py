@@ -57,6 +57,10 @@ class DirectoryFile(FileBase):
     def storage_type(self) -> StorageType:
         return StorageType.dir
 
+    @property
+    def is_empty(self):
+        return not any(e.is_active for e in self.entries)
+
     def pad_entries(self):
         # pad to multiple of entries_per_block, with header
         pad = -(len(self.entries)+1) % entries_per_block
@@ -129,7 +133,7 @@ class DirectoryFile(FileBase):
     def remove_directory(self, entry: FileEntry):
         assert entry.is_dir, f"Directory.remove_directory: not directory {entry}"
         dir = self.read(self.device, entry.key_pointer)
-        assert dir.header.file_count == 0, f"Directory.remove_directory: directory not empty {entry}"
+        assert dir.is_empty, f"Directory.remove_directory: directory not empty {entry}"
         self.remove_entry(entry)
         dir.remove()
 
@@ -156,7 +160,7 @@ class DirectoryFile(FileBase):
         self.write_entry(i, entry)
 
     def remove(self):
-        assert self.header.file_count == 0, f"Directory.remove: directory not empty {self}"
+        assert self.is_empty, f"Directory.remove: directory not empty {self}"
         super().remove()
 
     def write(self, compact: bool=True):
