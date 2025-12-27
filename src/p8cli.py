@@ -45,6 +45,13 @@ def open_volume(source: Path, output: Path|None=None, mode: DeviceMode= 'ro') ->
     return Volume.from_file(source, mode=mode)
 
 
+def _split_path(path: str) -> tuple[str, str]:
+    if '/' in path:
+        parent, name = path.rsplit('/', 1)
+        return parent or '/', name
+    return '/', path
+
+
 @app.command()
 def create(
         dest: Path = Depends(get_volume_path),
@@ -149,15 +156,48 @@ def cp(
         output: Path|None = Depends(get_output),
         ):
     """
-    TODO not implemented
-
     Copy single file (not directory) to target file,
     or one or more files to target directory.
     Directories are not copied: use globbing to expand as file lists.
     """
-
-    print("TODO: cp")
     volume = open_volume(source, output, mode='rw')
+
+    entries = volume.glob_paths(src)
+    if not entries:
+        print("No matching files found")
+        raise typer.Exit(1)
+
+    dst_entry = volume.path_entry(dst)
+    is_dst_dir = dst_entry and dst_entry.is_dir
+
+    if len(entries) > 1 and not is_dst_dir:
+        print(f"Target {dst} is not a directory")
+        raise typer.Exit(1)
+
+    for e in entries:
+        if e.is_dir:
+            print(f"Omitting directory {e.file_name}")
+            continue
+
+        if is_dst_dir:
+            dest_dir = volume.read_directory(dst_entry)
+            dest_name = e.file_name
+        else:
+            parent_path, name = _split_path(dst)
+            parent_entry = volume.path_entry(parent_path)
+            if not parent_entry or not parent_entry.is_dir:
+                 print(f"Parent directory {parent_path} not found")
+                 raise typer.Exit(1)
+            dest_dir = volume.read_directory(parent_entry)
+            dest_name = legal_path(name)
+
+        f_src = volume.read_simple_file(e)
+        f_dst = PlainFile(
+            device=volume.device,
+            file_name=dest_name,
+            data=f_src.data
+        )
+        dest_dir.add_simple_file(f_dst)
 
 
 @app.command()
@@ -168,11 +208,60 @@ def mv(
         output: Path|None = Depends(get_output),
     ):
     """
-    TODO Move single file to target file,
+    Move single file to target file,
     or move one or more files (including directories) to target directory.
     """
-    print("TODO: mv")
     volume = open_volume(source, output, mode='rw')
+
+    entries = volume.glob_paths(src)
+    if not entries:
+        print("No matching files found")
+        raise typer.Exit(1)
+
+    dst_entry = volume.path_entry(dst)
+    is_dst_dir = dst_entry and dst_entry.is_dir
+
+    if len(entries) > 1 and not is_dst_dir:
+        print(f"Target {dst} is not a directory")
+        raise typer.Exit(1)
+
+    for e in entries:
+        if is_dst_dir:
+            dest_dir = volume.read_directory(dst_entry)
+            dest_name = e.file_name
+        else:
+            parent_path, name = _split_path(dst)
+            parent_entry = volume.path_entry(parent_path)
+            if not parent_entry or not parent_entry.is_dir:
+                 print(f"Parent directory {parent_path} not found")
+                 raise typer.Exit(1)
+            dest_dir = volume.read_directory(parent_entry)
+            dest_name = legal_path(name)
+
+        src_dir = volume.parent_directory(e)
+        if src_dir.block_list[0] == dest_dir.block_list[0]:
+            src_dir = dest_dir
+
+        if src_dir.block_list[0] == dest_dir.block_list[0] and e.file_name == dest_name:
+            continue
+
+        if dest_dir.file_entry(dest_name):
+             print(f"Destination {dest_name} already exists")
+             raise typer.Exit(1)
+
+        src_dir.remove_entry(e)
+
+        e.file_name = dest_name
+        e.header_pointer = dest_dir.block_list[0]
+
+        idx = dest_dir.free_entry()
+        dest_dir.write_entry(idx, e)
+
+        if e.is_dir:
+            sub_dir = volume.read_directory(e)
+            sub_dir.header.parent_pointer = dest_dir.block_list[0]
+            sub_dir.header.parent_entry_number = idx
+            sub_dir.write(compact=False)
 
 
 @app.command()
@@ -212,13 +301,7 @@ def mkdir(
     """
     volume = open_volume(source, output, mode='rw')
 
-    if '/' in dst:
-        parent_path, name = dst.rsplit('/', 1)
-        if not parent_path:
-            parent_path = '/'
-    else:
-        parent_path = '/'
-        name = dst
+    parent_path, name = _split_path(dst)
 
     if not name:
         print(f"Invalid directory name: {dst}")
