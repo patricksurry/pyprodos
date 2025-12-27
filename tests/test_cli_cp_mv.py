@@ -108,3 +108,50 @@ def test_mv_root_directory_error(vol_with_file: Path) -> None:
     result = runner.invoke(app, ["mv", str(vol_with_file), "/", "/DIR"])
     assert result.exit_code == 1
     assert "Cannot move root directory" in result.stdout
+
+
+def test_cp_no_matching_files(vol_with_file: Path) -> None:
+    """Test cp fails when no files match the pattern"""
+    result = runner.invoke(app, ["cp", str(vol_with_file), "/NONEXISTENT", "/DEST"])
+    assert result.exit_code == 1
+    assert "No matching files found" in result.stdout
+
+
+def test_cp_multiple_to_non_directory(vol_with_file: Path) -> None:
+    """Test cp fails when copying multiple files to a non-directory target"""
+    runner.invoke(app, ["cp", str(vol_with_file), "/HELLO", "/COPY"])
+    result = runner.invoke(app, ["cp", str(vol_with_file), "/HELLO", "/COPY", "/DEST"])
+    assert result.exit_code == 1
+    assert "not a directory" in result.stdout
+
+
+def test_cp_to_nonexistent_parent(vol_with_file: Path) -> None:
+    """Test cp fails when parent directory doesn't exist"""
+    result = runner.invoke(app, ["cp", str(vol_with_file), "/HELLO", "/NODIR/FILE"])
+    assert result.exit_code == 1
+    assert "Parent directory" in result.stdout
+    assert "not found" in result.stdout
+
+
+def test_cp_omit_directory(vol_with_file: Path) -> None:
+    """Test cp skips directories with warning"""
+    runner.invoke(app, ["mkdir", str(vol_with_file), "/DIR"])
+    result = runner.invoke(app, ["cp", str(vol_with_file), "/DIR", "/DEST"])
+    assert result.exit_code == 0
+    assert "Omitting directory" in result.stdout
+
+
+def test_mv_no_matching_files(vol_with_file: Path) -> None:
+    """Test mv fails when no files match the pattern"""
+    result = runner.invoke(app, ["mv", str(vol_with_file), "/NONEXISTENT", "/DEST"])
+    assert result.exit_code == 1
+    assert "No matching files found" in result.stdout
+
+
+def test_mv_multiple_to_non_directory(vol_with_file: Path) -> None:
+    """Test mv fails when moving multiple files to a non-directory target"""
+    runner.invoke(app, ["cp", str(vol_with_file), "/HELLO", "/FILE1"])
+    runner.invoke(app, ["cp", str(vol_with_file), "/HELLO", "/FILE2"])
+    result = runner.invoke(app, ["mv", str(vol_with_file), "/FILE1", "/FILE2", "/DEST"])
+    assert result.exit_code == 1
+    assert "not a directory" in result.stdout

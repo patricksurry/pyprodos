@@ -102,6 +102,12 @@ class Volume:
         self.device.write_block(0, data[:block_size])
         self.device.write_block(1, data[block_size:2*block_size])
 
+    def read_loader(self) -> bytes:
+        """Read the boot loader from blocks 0 and 1."""
+        block0 = self.device.read_block(0)
+        block1 = self.device.read_block(1)
+        return block0 + block1
+
     def path_entry(self, path: str) -> FileEntry|None:
         entries = self.glob_paths([path])
         if len(entries) > 1:

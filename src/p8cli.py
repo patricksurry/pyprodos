@@ -414,15 +414,29 @@ def host_import(
 @app.command('export')
 def host_export(
         source: Path = Depends(get_volume_path),
-        src: list[str] = Depends(get_paths),
+        src: list[str] = Depends(get_optional_paths),
         output: Path|None = Depends(get_output),
+        loader: Annotated[Path | None, Option("--loader", "-l", help="Export boot loader to file")] = None,
     ):
     """
-    Export SRC to host DST, or SRC(s) to host DIRECTORY
+    Export SRC to host DST, or SRC(s) to host DIRECTORY.
+    Use --loader to export the boot loader blocks.
     """
-    dst = src[0] if len(src) == 1 else src.pop()
     volume = open_volume(source, output)
 
+    # Handle loader export
+    if loader:
+        loader_data = volume.read_loader()
+        with open(loader, 'wb') as f:
+            f.write(loader_data)
+        return
+
+    # Handle file export
+    if not src:
+        print("Error: paths required when not using --loader")
+        raise typer.Exit(1)
+
+    dst = src[0] if len(src) == 1 else src.pop()
     entries = volume.glob_paths(src)
     if not entries:
         print("No matching files found")
