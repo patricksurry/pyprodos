@@ -17,26 +17,29 @@ logging.basicConfig(level=logging.WARN)
 
 app = TyperDI()
 
-def get_force(force: Annotated[bool, typer.Option("--force", "-f")] = False):
+def get_force(force: Annotated[bool, typer.Option("--force", "-f", help="Force overwrite existing files")] = False):
     return force
 
-def get_recursive(recursive: Annotated[bool, typer.Option("--recursive", "-r")] = False):
+def get_recursive(recursive: Annotated[bool, typer.Option("--recursive", "-r", help="Recursively list subdirectories")] = False):
     return recursive
 
-def get_path(path: Annotated[str, Argument]) -> str:
+def get_path(path: Annotated[str, Argument(help="ProDOS path (e.g., /DIR/FILE)")]) -> str:
     return path
 
-def get_optional_paths(paths: Annotated[list[str], Argument(default_factory=list)]) -> list[str]:
+def get_optional_paths(paths: Annotated[list[str], Argument(help="ProDOS path(s) (e.g., /DIR/FILE)", default_factory=list)]) -> list[str]:
     return paths
 
-def get_paths(paths: Annotated[list[str], Argument]) -> list[str]:
+def get_paths(paths: Annotated[list[str], Argument(help="ProDOS path(s) (e.g., /DIR/FILE)")]) -> list[str]:
     return paths
 
-def get_volume_path(volume: Annotated[Path, Argument]) -> Path:
+def get_volume_path(volume: Annotated[Path, Argument(help="Path to disk image file")]) -> Path:
     return volume
 
-def get_output(target: Annotated[Path|None, Option("--output", "-o")] = None) -> Path|None:
+def get_output(target: Annotated[Path|None, Option("--output", "-o", help="Output to a copy of the volume")] = None) -> Path|None:
     return target
+
+def get_host_paths(paths: Annotated[list[str], Argument(help="Host file path(s)")]) -> list[str]:
+    return paths
 
 def open_volume(source: Path, output: Path|None=None, mode: DeviceMode= 'ro') -> Volume:
     if output:
@@ -55,10 +58,10 @@ def _split_path(path: str) -> tuple[str, str]:
 @app.command()
 def create(
         dest: Path = Depends(get_volume_path),
-        size: int = 65535,
-        name: str = 'PYP8',
-        format: DeviceFormat = DeviceFormat.prodos,
-        loader: Path | None = None,
+        size: Annotated[int, Option("--size", "-s", help="Total blocks (512 bytes/block)")] = 65535,
+        name: Annotated[str, Option("--name", "-n", help="Volume name (max 15 chars)")] = 'PYP8',
+        format: Annotated[DeviceFormat, Option("--format", "-t", help="Disk image format")] = DeviceFormat.prodos,
+        loader: Annotated[Path | None, Option("--loader", "-l", help="Boot loader binary file")] = None,
         force: bool = Depends(get_force),
     ):
     """
@@ -353,7 +356,7 @@ def rmdir(
 @app.command('import')
 def host_import(
         source: Path = Depends(get_volume_path),
-        src: list[str] = Depends(get_paths),
+        src: list[str] = Depends(get_host_paths),
         dst: str = Depends(get_path),
         output: Path|None = Depends(get_output),
         force: bool = Depends(get_force),
