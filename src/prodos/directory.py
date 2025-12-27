@@ -4,8 +4,8 @@ import logging
 from fnmatch import fnmatch
 
 from .globals import entries_per_block, block_size
-from .metadata import FileEntry, DirectoryEntry, VolumeDirectoryHeaderEntry, \
-    StorageType, SubdirectoryHeaderEntry
+from .metadata import FileEntry, DirectoryEntry, StorageType, \
+    VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry, DirectoryHeaderEntry
 from .blocks import DirectoryBlock
 from .device import BlockDevice
 from .file import PlainFile, FileBase
@@ -36,7 +36,7 @@ class DirectoryFile(FileBase):
             |  |Unused |    |Unused |   ...   |Unused |
              \ +-------+    +-------+         +-------+
     """
-    header: DirectoryEntry
+    header: DirectoryHeaderEntry
     entries: list[FileEntry] = field(default_factory=list[FileEntry])
 
     def __repr__(self):
@@ -130,6 +130,38 @@ class DirectoryFile(FileBase):
         f.write()
         self.add_entry(f.entry(self.block_list[0]))
 
+    def move_simple_file(self, entry: FileEntry, dest_dir: "DirectoryFile", dest_name: str):
+        """Move a simple file from this directory to another directory with a new name."""
+        assert entry.is_plain_file, f"Directory.move_simple_file: not simple file {entry}"
+
+        # Check for no-op: same directory and same name
+        same_dir = self.block_list[0] == dest_dir.block_list[0]
+        if same_dir and entry.file_name == dest_name:
+            import logging
+            logging.warning(f"move_simple_file: {entry.file_name} already at destination")
+            return
+
+        # Check if destination already exists
+        if dest_dir.file_entry(dest_name):
+            raise ValueError(f"Destination {dest_name} already exists")
+
+        # If moving within same directory (rename), update in place
+        if same_dir:
+            idx = next((i for i, e in enumerate(self.entries) if e == entry), None)
+            assert idx is not None, f"Directory.move_simple_file: entry not found"
+            entry.file_name = dest_name
+            self.write_entry(idx, entry)
+        else:
+            # Remove from source directory
+            self.remove_entry(entry)
+
+            # Update entry metadata
+            entry.file_name = dest_name
+            entry.header_pointer = dest_dir.block_list[0]
+
+            # Add to destination directory
+            dest_dir.add_entry(entry)
+
     def remove_directory(self, entry: FileEntry):
         assert entry.is_dir, f"Directory.remove_directory: not directory {entry}"
         dir = self.read(self.device, entry.key_pointer)
@@ -158,6 +190,47 @@ class DirectoryFile(FileBase):
 
         entry = subdir.entry(self.block_list[0])
         self.write_entry(i, entry)
+
+    def move_directory(self, entry: FileEntry, dest_dir: "DirectoryFile", dest_name: str):
+        """Move a subdirectory from this directory to another directory with a new name."""
+        assert entry.is_dir, f"Directory.move_directory: not directory {entry}"
+
+        # Check for no-op: same directory and same name
+        same_dir = self.block_list[0] == dest_dir.block_list[0]
+        if same_dir and entry.file_name == dest_name:
+            import logging
+            logging.warning(f"move_directory: {entry.file_name} already at destination")
+            return
+
+        # Check if destination already exists
+        if dest_dir.file_entry(dest_name):
+            raise ValueError(f"Destination {dest_name} already exists")
+
+        # If moving within same directory (rename), update in place
+        if same_dir:
+            idx = next((i for i, e in enumerate(self.entries) if e == entry), None)
+            assert idx is not None, f"Directory.move_directory: entry not found"
+            entry.file_name = dest_name
+            self.write_entry(idx, entry)
+        else:
+            # Remove from source directory
+            self.remove_entry(entry)
+
+            # Update entry metadata
+            entry.file_name = dest_name
+            entry.header_pointer = dest_dir.block_list[0]
+
+            # Add to destination directory
+            idx = dest_dir.free_entry()
+            dest_dir.write_entry(idx, entry)
+
+            # Update subdirectory header with new parent information
+            sub_dir = self.read(self.device, entry.key_pointer)
+            assert isinstance(sub_dir.header, SubdirectoryHeaderEntry), \
+                f"Directory.move_directory: expected SubdirectoryHeaderEntry, got {type(sub_dir.header)}"
+            sub_dir.header.parent_pointer = dest_dir.block_list[0]
+            sub_dir.header.parent_entry_number = idx
+            sub_dir.write(compact=False)
 
     def remove(self):
         assert self.is_empty, f"Directory.remove: directory not empty {self}"

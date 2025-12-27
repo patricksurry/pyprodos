@@ -180,6 +180,7 @@ def cp(
             continue
 
         if is_dst_dir:
+            assert dst_entry # for typing
             dest_dir = volume.read_directory(dst_entry)
             dest_name = e.file_name
         else:
@@ -218,6 +219,12 @@ def mv(
         print("No matching files found")
         raise typer.Exit(1)
 
+    # Check for attempting to move root directory
+    for e in entries:
+        if e.header_pointer == 0:
+            print("Cannot move root directory")
+            raise typer.Exit(1)
+
     dst_entry = volume.path_entry(dst)
     is_dst_dir = dst_entry and dst_entry.is_dir
 
@@ -227,6 +234,7 @@ def mv(
 
     for e in entries:
         if is_dst_dir:
+            assert dst_entry # for typing
             dest_dir = volume.read_directory(dst_entry)
             dest_name = e.file_name
         else:
@@ -239,29 +247,16 @@ def mv(
             dest_name = legal_path(name)
 
         src_dir = volume.parent_directory(e)
-        if src_dir.block_list[0] == dest_dir.block_list[0]:
-            src_dir = dest_dir
 
-        if src_dir.block_list[0] == dest_dir.block_list[0] and e.file_name == dest_name:
-            continue
-
-        if dest_dir.file_entry(dest_name):
-             print(f"Destination {dest_name} already exists")
-             raise typer.Exit(1)
-
-        src_dir.remove_entry(e)
-
-        e.file_name = dest_name
-        e.header_pointer = dest_dir.block_list[0]
-
-        idx = dest_dir.free_entry()
-        dest_dir.write_entry(idx, e)
-
-        if e.is_dir:
-            sub_dir = volume.read_directory(e)
-            sub_dir.header.parent_pointer = dest_dir.block_list[0]
-            sub_dir.header.parent_entry_number = idx
-            sub_dir.write(compact=False)
+        # Use the appropriate move method based on file type
+        try:
+            if e.is_dir:
+                src_dir.move_directory(e, dest_dir, dest_name)
+            else:
+                src_dir.move_simple_file(e, dest_dir, dest_name)
+        except ValueError as ex:
+            print(str(ex))
+            raise typer.Exit(1)
 
 
 @app.command()

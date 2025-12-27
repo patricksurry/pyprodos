@@ -6,7 +6,7 @@ import logging
 
 from .globals import entry_length, entries_per_block, block_size
 from .metadata import FileEntry, NamedEntry, StorageType, \
-    DirectoryEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry
+    DirectoryEntry, DirectoryHeaderEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry
 
 
 @dataclass(kw_only=True)
@@ -23,14 +23,14 @@ class AbstractBlock:
 class DirectoryBlock(AbstractBlock):
     SIZE: ClassVar = 4
     _struct: str = "<HH"
-    _header_factory: ClassVar[dict[StorageType, type[DirectoryEntry]]] = {
+    _header_factory: ClassVar[dict[StorageType, type[DirectoryHeaderEntry]]] = {
         StorageType.voldirhdr: VolumeDirectoryHeaderEntry,
         StorageType.subdirhdr: SubdirectoryHeaderEntry
     }
 
     prev_pointer: int
     next_pointer: int
-    header_entry: Optional[DirectoryEntry] = None
+    header_entry: DirectoryHeaderEntry | None = None
     file_entries: list[FileEntry]
 
     def __repr__(self):

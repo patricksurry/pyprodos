@@ -368,6 +368,10 @@ class SubdirectoryHeaderEntry(DirectoryEntry):
             **shallow_dict(d)
         )
 
+
+DirectoryHeaderEntry = VolumeDirectoryHeaderEntry | SubdirectoryHeaderEntry
+
+
 @dataclass(kw_only=True)
 class FileEntry(NamedEntry):
     """

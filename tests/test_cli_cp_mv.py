@@ -99,3 +99,12 @@ def test_mv_dir_rename(vol_with_file: Path) -> None:
     # Verify we can still access it
     result = runner.invoke(app, ["ls", str(vol_with_file), "/DIR/MOVED"])
     assert result.exit_code == 0
+
+
+def test_mv_root_directory_error(vol_with_file: Path) -> None:
+    runner.invoke(app, ["mkdir", str(vol_with_file), "/DIR"])
+
+    # 7. Test that moving root directory fails with error
+    result = runner.invoke(app, ["mv", str(vol_with_file), "/", "/DIR"])
+    assert result.exit_code == 1
+    assert "Cannot move root directory" in result.stdout
