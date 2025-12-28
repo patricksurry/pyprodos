@@ -13,7 +13,7 @@ boot disk from https://prodos8.com/.  (There's a copy in `images/` here.)
 Check what's on it:
 
     % prodos info images/ProDOS_2_4_3.po
-    
+
     Volume PRODOS.2.4.3 23-12-29T19:07
     BlockDevice on images/ProDOS_2_4_3.po contains 280 total blocks, 26 free (91% used)
 
@@ -27,11 +27,6 @@ Check what's on it:
     ...
     PRODOS                17128 2/FF RW-BND 23-12-30T02:43 23-12-30T02:43    34 @ 7
     README                  999 2/04 RW-BND 23-12-30T02:43 23-12-30T02:43     3 @ 251
-    17 files in PRODOS.2.4.3 F RW--ND 23-12-29T19:07
-    BASIC.SYSTEM          10240 2/FF RW-BND 23-12-30T02:43 23-12-30T02:43 21 @ 42
-    ...
-    PRODOS                17128 2/FF RW-BND 23-12-30T02:43 23-12-30T02:43 34 @ 7
-    README                  999 2/04 RW-BND 23-12-30T02:43 23-12-30T02:43 3 @ 251
         17 files in PRODOS.2.4.3 F RW--ND 23-12-29T19:07
 
 Let's extract the `PRODOS` o/s and `BASIC.SYSTEM` files, plus the bootloader.
