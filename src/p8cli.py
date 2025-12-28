@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from prodos.volume import Volume
 from prodos.device import DeviceFormat, DeviceMode
 from prodos.file import PlainFile, legal_path
+from prodos.metadata import FileEntry
 
 
 logging.basicConfig(level=logging.WARN)
@@ -166,6 +167,9 @@ def ls(
         if not entries:
             print("No matching files found")
             raise typer.Exit(1)
+
+        print(FileEntry.heading)
+        print('-' * len(FileEntry.heading))
 
         while entries:
             e = entries.pop(0)

@@ -53,7 +53,7 @@ class StorageType(IntEnum):
     seedling = 1
     sapling = 2
     tree = 3
-    pascal_area = 4
+#    pascal = 4         #TODO not implemented, see https://prodos8.com/docs/technote/25/
     extended = 5
     dir = 0xD
     subdirhdr = 0xE
@@ -431,6 +431,9 @@ class FileEntry(NamedEntry):
     empty: ClassVar['FileEntry']
     root: ClassVar['FileEntry']
 
+    # match __repr__ layout
+    heading: ClassVar = "File name               EOF T/FT Access Created        Modified      Blocks @ Key"
+
     file_type: int
     key_pointer: int        # pointer fo file key block
     blocks_used: int
@@ -449,7 +452,7 @@ class FileEntry(NamedEntry):
         name = self.file_name
         if self.is_dir:
             name += '/'
-        return f"{name:18s} {self.eof:>8d} {typ} {flags} {self.created} {self.last_mod} {self.blocks_used:d} @ {self.key_pointer}"
+        return f"{name:18s} {self.eof:>8d} {typ} {flags} {self.created} {self.last_mod} {self.blocks_used:>5d} @ {self.key_pointer}"
 
     @property
     def is_dir(self) -> bool:
@@ -488,7 +491,7 @@ class FileEntry(NamedEntry):
         n = NamedEntry.SIZE
         d = NamedEntry.unpack(buf[:n])
 
-        if d.storage_type not in {StorageType.empty, StorageType.dir} | simple_file_types:
+        if d.storage_type not in list(map(int, StorageType)):
             logging.warning(f"FileEntry: unexpected storage type {d.storage_type:x}")
 
         (
