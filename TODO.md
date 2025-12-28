@@ -53,6 +53,7 @@ When ready to publish to production PyPI (currently on TestPyPI at v0.0.3):
 
 ## Backlog
 
+- review volmap code, move walk into volume.py and generalize so we can map a function across the directory tree (cf. check)
 - support walk for gsos extended file
 - support export for gsos extended file
 - implement check CLI command, using walk with some additional checks, like eof file size vs actual block count used

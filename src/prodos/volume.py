@@ -63,7 +63,7 @@ class Volume:
                 bit_map_pointer = 6,
                 total_blocks = total_blocks,
             ),
-            file_name = volume_name.upper(), #TODO
+            file_name = volume_name.upper(), #TODO can we avoid the duplication with header?
             entries=[FileEntry.empty] * (4 * entries_per_block - 1),
             block_list=list(range(volume_key_block, volume_key_block + volume_directory_length))
         ).write()
