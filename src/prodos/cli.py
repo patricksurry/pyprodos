@@ -139,7 +139,7 @@ def check(source: Path = Depends(get_volume_path),):
     - warn if read block not marked active
     - warn if used blocks not accessed
     """
-    print("TODO: check")
+    print("Not implemented yet")
 
 
 def default_path(paths: Optional[list[str]]) -> list[str]:

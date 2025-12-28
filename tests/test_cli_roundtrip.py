@@ -2,7 +2,7 @@ from typer.testing import CliRunner
 from os import path
 from pathlib import Path
 
-from p8cli import app
+from prodos.cli import app
 
 
 runner = CliRunner()

@@ -110,7 +110,7 @@ class DirectoryFile(FileBase):
         self.write_entry(self.free_entry(), entry)
 
     def remove_entry(self, entry: FileEntry):
-        #TODO test for directory
+        #TODO do we need to test for directory?
         i = next((i for i, e in enumerate(self.entries) if e == entry), None)
         assert i is not None, f"Directory.remove_entry {entry} not found in {self}"
         self.entries[i] = FileEntry.empty
@@ -183,7 +183,7 @@ class DirectoryFile(FileBase):
                 parent_pointer=self.block_list[0],
                 parent_entry_number=i
             ),
-            file_name=file_name,  #TODO
+            file_name=file_name,  #TODO can we avoid duplication from header
             entries=[]
         )
         subdir.write()

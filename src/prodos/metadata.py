@@ -45,15 +45,12 @@ Figure B-12. Header and Entry Fields
 """
 
 
-#TODO non-standard types https://prodos8.com/docs/technote/25/
-# 4=pascal area, 5=extended file with ExtendedKeyBlock with data and resource fork
-
 class StorageType(IntEnum):
     empty = 0
     seedling = 1
     sapling = 2
     tree = 3
-#    pascal = 4         #TODO not implemented, see https://prodos8.com/docs/technote/25/
+#    pascal = 4                 #TODO not implemented, see https://prodos8.com/docs/technote/25/
     extended = 5
     dir = 0xD
     subdirhdr = 0xE
@@ -137,7 +134,7 @@ class DirectoryEntry(NamedEntry):
     SIZE: ClassVar = NamedEntry.SIZE + 19
     _struct: ClassVar = "<8s4s5BH"
 
-    #TODO
+    #TODO/NOTE
     # spec suggests there are magic bytes for VolumeDirectoryHeaderEntry
     # namely $75 $23 $00 $c3 $27 $0d $00 where $23 is version 2.3
     # from source of ProDOS 8 V2.0.3      06-May-93

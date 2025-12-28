@@ -23,9 +23,9 @@ def legal_path(path: str) -> str:
 class FileBase:
     device: BlockDevice
     file_name: str
-    file_type: int = 0xff       #TODO needed for system file boot
+    file_type: int = 0xff       #TODO hack needed for system file boot
     block_list: list[int] = field(default_factory=list[int])
-    version: int = 0            #TODO populate from header
+    version: int = 0            #TODO populate these from header
     min_version: int = 0
     created: P8DateTime = field(default_factory=P8DateTime.now)
 
@@ -117,7 +117,7 @@ class PlainFile(FileBase):
         """
         write to a hierarchical file, returning storage level.
         Sparse files are handled with blocks of zeros encoded with block index 0.
-        TODO this implementation writes completely empty sapling and tree files with
+        TODO/NOTE this implementation will write completely empty sapling and tree files with
         no data blocks, whereas tech doc notes:
 
             The first data block of a standard file, be it a seedling,

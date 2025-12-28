@@ -37,7 +37,6 @@ class BlockDevice:
         access = ACCESS_WRITE if mode == 'rw' else ACCESS_READ
         f = open(source, 'r+b' if mode == 'rw' else 'rb', buffering=0)
         self.mm = mmap(f.fileno(), 0, access=access)
-        #TODO mmap
         self.skip = 0
         self._access_log: list[AccessLogEntry] = []
 

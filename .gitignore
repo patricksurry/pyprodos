@@ -6,3 +6,5 @@ __pycache__/
 scratch/
 .coverage
 htmlcov/
+dist/
+build/

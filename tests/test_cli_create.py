@@ -1,7 +1,7 @@
 from pathlib import Path
 from typer.testing import CliRunner
 
-from p8cli import app
+from prodos.cli import app
 
 
 runner = CliRunner(catch_exceptions=False)
