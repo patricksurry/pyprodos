@@ -1,10 +1,15 @@
 
-- check `prodos <vol> import X Y`  when Y already exists?
-
-- need file type $ff for system file boot
-- implement: check, chinfo, cat
-- easier way to extract loader or specific blocks
-- (maybe) add a repl mode https://github.com/tiangolo/typer/issues/185
-- add --verbose option to show access log (`device.dump_access_log()`)
 
 - storage type $4 (pascal area) and $5 (GS/OS extended) see https://prodos8.com/docs/technote/25/
+
+- hacked file type $ff everywhere, needed for system file boot
+- implement: check, chinfo, cat
+- (maybe) add a repl mode https://github.com/tiangolo/typer/issues/185
+
+
+# invalid file size?
+❯ prodos ls images/ProDOS8.2mg /GAMES/A.TO.B/BILLBUDGE/BUDGE.SYSTEM
+BUDGE.SYSTEM            640 1/FF RW-BND 17-06-21T15:52 14-10-01T05:33 1 @ 1690
+
+> prodos info --map ./images/GSOSv6.0.1.po
+WARNING:root:FileEntry: unexpected storage type 5

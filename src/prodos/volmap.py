@@ -73,7 +73,7 @@ def walk_volume(volume: Volume) -> BlockMap:
         usage[h.bit_map_pointer + i] = BlockUsage.BITMAP
 
     # Walk all files and directories recursively, tracking block access
-    def walk_directory(dir_entry: FileEntry):
+    def walk_directory(dir_entry: FileEntry, cwd: str = "/"):
         """Recursively walk a directory and mark all blocks it accesses."""
         # Mark session before reading to track which blocks are accessed
         mark = device.mark_session()
@@ -86,7 +86,7 @@ def walk_volume(volume: Volume) -> BlockMap:
             if usage[block_idx] != BlockUsage.FREE:
                 logging.warning(
                     f"Block {block_idx} already marked as {usage[block_idx].name}, "
-                    f"but directory '{dir_entry.file_name}' is also reading it"
+                    f"but directory '{cwd}' is also reading it"
                 )
             usage[block_idx] = new_usage
 
@@ -95,18 +95,25 @@ def walk_volume(volume: Volume) -> BlockMap:
             if not entry.is_active:
                 continue
 
+            # Build path for this entry
+            entry_path = f"{cwd}{entry.file_name}/" if entry.is_dir else f"{cwd}{entry.file_name}"
+
             if entry.is_dir:
                 # Recursively walk subdirectories
-                walk_directory(entry)
+                walk_directory(entry, entry_path)
             elif entry.is_plain_file:
                 # Mark file blocks
-                walk_file(entry)
+                walk_file(entry, entry_path)
 
-    def walk_file(entry: FileEntry):
+    def walk_file(entry: FileEntry, cwd: str):
         """Walk a file and mark all its blocks by reading it."""
         # Mark session before reading to track which blocks are accessed
         mark = device.mark_session()
-        volume.read_simple_file(entry)
+        try:
+            volume.read_simple_file(entry)
+        except (AssertionError, Exception) as e:
+            logging.warning(f"Error reading file '{cwd}': {e}")
+            return
 
         # Get all blocks read during file read with their types
         blocks_with_types = device.get_typed_access_log('r', mark)
@@ -118,12 +125,12 @@ def walk_volume(volume: Volume) -> BlockMap:
             if usage[block_idx] != BlockUsage.FREE:
                 logging.warning(
                     f"Block {block_idx} already marked as {usage[block_idx].name}, "
-                    f"but file '{entry.file_name}' is also using it as {new_usage.name}"
+                    f"but file '{cwd}' is also using it as {new_usage.name}"
                 )
             usage[block_idx] = new_usage
 
     # Start walking from root
-    walk_directory(FileEntry.root)
+    walk_directory(FileEntry.root, "/")
 
     return BlockMap(total_blocks=total_blocks, usage=usage, free_map=device.free_map)
 
