@@ -259,7 +259,7 @@ class DirectoryFile(FileBase):
             header_entry=self.header,
             file_entries=self.entries[:offset]
         )
-        self.device.write_block(self.block_list[0], key.pack())
+        self.device.write_typed_block(self.block_list[0], key)
         for i in range(1, n):
             blk = DirectoryBlock(
                 prev_pointer=self.block_list[i-1],
@@ -267,7 +267,7 @@ class DirectoryFile(FileBase):
                 file_entries=self.entries[offset:offset + entries_per_block]
             )
             offset += entries_per_block
-            self.device.write_block(self.block_list[i], blk.pack())
+            self.device.write_typed_block(self.block_list[i], blk)
         assert offset == len(self.entries), f"Directory.write: unexpected offset {offset} != {len(self.entries)}"
 
     @classmethod

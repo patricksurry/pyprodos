@@ -24,6 +24,8 @@ dependencies = [
     "bitarray>=3.7.1",
     "pytest>=8.4.2",
     "pytest-cov>=6.0.0",
+    "pyright>=1.1.390",
+    "rich>=13.0.0",
     "typer>=0.19.2",
     "typer-di>=0.1.3",
 ]

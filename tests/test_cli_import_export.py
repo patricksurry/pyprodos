@@ -108,3 +108,116 @@ def test_export_multiple_to_non_directory(vol_with_dir: Path, tmp_path: Path) ->
     result = runner.invoke(app, ["export", str(vol_with_dir), "/FILE1", "/FILE2", str(output)])
     assert result.exit_code == 1
     assert "directory" in result.stdout
+
+
+def test_import_tree_file_and_show_map(tmp_path: Path) -> None:
+    """Test importing a tree-sized file (>128KB) and displaying the block map.
+
+    This test verifies that importing actual ProDOS files works correctly,
+    even for tree files (>128KB).
+    """
+    vol = tmp_path / "tree_clirunner.po"
+
+    # Create empty volume with enough space for tree file (1600 blocks = 800KB)
+    result = runner.invoke(app, ["create", str(vol), "--size", "1600"])
+    assert result.exit_code == 0, f"Create failed: {result.stdout}"
+
+    # Use the same ProDOS image file that works at command line
+    source_file = Path("images/ProDOS_2_4_3.po")
+    if not source_file.exists():
+        pytest.skip(f"Test file {source_file} not found")
+
+    # Import the tree file (same file that works at command line)
+    result = runner.invoke(app, ["import", str(vol), str(source_file), "TREE.DAT"])
+    assert result.exit_code == 0, f"Import failed: {result.stdout}"
+
+    print(f"\n*** CliRunner created volume saved to: {vol.absolute()}")
+    print(f"*** Compare with working volume: tree.po")
+    print(f"*** File size: {source_file.stat().st_size} bytes")
+
+    # Verify the file was imported and has tree storage type (type 3)
+    result = runner.invoke(app, ["ls", str(vol)])
+    assert result.exit_code == 0, f"ls failed: {result.stdout}"
+    assert "TREE.DAT" in result.stdout
+    assert "143360" in result.stdout  # File size
+
+    # Now run info --map to verify the volume can be walked
+    # This is where test_tree_file_walk fails
+    result = runner.invoke(app, ["info", "--map", str(vol)])
+    if result.exit_code != 0:
+        print(f"Exit code: {result.exit_code}")
+        print(f"Stdout:\n{result.stdout}")
+        if result.exception:
+            import traceback
+            print(f"Exception:\n{''.join(traceback.format_exception(type(result.exception), result.exception, result.exception.__traceback__))}")
+    assert result.exit_code == 0, f"info --map failed: {result.stdout}"
+
+    # Verify the map output contains expected block types
+    assert "!" in result.stdout  # loader
+    assert "%" in result.stdout  # voldir
+    assert "@" in result.stdout  # bitmap
+    assert "#" in result.stdout  # index blocks (key)
+    assert "+" in result.stdout  # data blocks
+    assert "." in result.stdout  # free blocks
+
+    # Verify the legend is present
+    assert "Symbols:" in result.stdout
+    assert "loader" in result.stdout
+    assert "key" in result.stdout  # index blocks
+    assert "data" in result.stdout
+
+
+def test_import_synthetic_tree_file(tmp_path: Path) -> None:
+    """Test importing synthetic tree-sized data (>128KB) via CLI import.
+
+    This test verifies that tree files work correctly with synthetic data after
+    fixing the IndexBlock.pack() bug (padding block_pointers to 256 entries before
+    splitting into LSB/MSB lists).
+    """
+    vol = tmp_path / "tree_synthetic.po"
+
+    # Create empty volume with enough space for tree file (1600 blocks = 800KB)
+    result = runner.invoke(app, ["create", str(vol), "--size", "1600"])
+    assert result.exit_code == 0, f"Create failed: {result.stdout}"
+
+    # Create synthetic tree data - same as test_tree_file_walk uses
+    size = 143360
+    tree_data = b'\1' * size
+    synthetic_file = tmp_path / "synthetic.dat"
+    synthetic_file.write_bytes(tree_data)
+
+    print(f"\n*** Importing synthetic tree file: {len(tree_data)} bytes")
+
+    # Import the synthetic tree file via CLI
+    result = runner.invoke(app, ["import", str(vol), str(synthetic_file), "SYNTHETIC.BIN"])
+    assert result.exit_code == 0, f"Import failed: {result.stdout}"
+
+    # Verify the file was imported and has tree storage type (type 3)
+    result = runner.invoke(app, ["ls", str(vol)])
+    assert result.exit_code == 0, f"ls failed: {result.stdout}"
+    assert "SYNTHETIC.BIN" in result.stdout
+    assert str(size) in result.stdout  # File size
+
+    print(f"*** Synthetic tree volume saved to: {vol.absolute()}")
+
+    # Now run info --map to verify the volume can be walked
+    # If this fails like test_tree_file_walk, the bug is in tree file writing generally
+    # If this passes, the bug is specifically in PlainFile constructor
+    result = runner.invoke(app, ["info", "--map", str(vol)])
+    if result.exit_code != 0:
+        print(f"Exit code: {result.exit_code}")
+        print(f"Stdout:\n{result.stdout}")
+        if result.exception:
+            import traceback
+            print(f"Exception:\n{''.join(traceback.format_exception(type(result.exception), result.exception, result.exception.__traceback__))}")
+    assert result.exit_code == 0, f"info --map failed: {result.stdout}"
+
+    # Verify the map output contains expected block types
+    assert "!" in result.stdout  # loader
+    assert "%" in result.stdout  # voldir
+    assert "@" in result.stdout  # bitmap
+    assert "#" in result.stdout  # index blocks (key)
+    assert "+" in result.stdout  # data blocks
+    assert "." in result.stdout  # free blocks
+
+    print("*** SUCCESS: CLI import of synthetic tree data works!")

@@ -83,17 +83,16 @@ class DirectoryBlock(AbstractBlock):
 @dataclass(kw_only=True)
 class IndexBlock(AbstractBlock):
     """
-    index blocks store 256 two byte block pointers, with the lsbs
-    in bytes 0-255 and the msbs in bytes 256-511
+    index blocks store up to 256 two byte block pointers,
+    with the LSBs in bytes 0-255 and the MSBs in bytes 256-511
     """
     block_pointers: list[int]
 
     def pack(self) -> bytes:
-        return bytes(
-            [p & 0xff for p in self.block_pointers]
-            + [p >> 8 for p in self.block_pointers]
-            + [0]*(block_size - (len(self.block_pointers) << 1))
-        )
+        ps = self.block_pointers
+        assert len(ps) <= 256, f"IndexBlock.pack: too many pointers {len(ps)}"
+        ps += [0]*(256 - len(ps))
+        return bytes([p & 0xff for p in ps] + [p >> 8 for p in ps])
 
     @classmethod
     def unpack(cls, buf: bytes) -> Self:

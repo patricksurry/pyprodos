@@ -26,7 +26,7 @@ class Volume:
 
     def __init__(self, device: BlockDevice):
         self.device = device
-        vkb = self.device.read_block_type(volume_key_block, DirectoryBlock, unsafe=True)
+        vkb = self.device.read_typed_block(volume_key_block, DirectoryBlock, unsafe=True)
         assert isinstance(vkb.header_entry, VolumeDirectoryHeaderEntry), \
             f"Volume header entry has unexpected type {type(vkb.header_entry)}"
         vh = vkb.header_entry

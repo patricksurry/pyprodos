@@ -1,4 +1,4 @@
-from typing import Literal, Optional, Type, TypeVar
+from typing import Literal, Optional, Type, TypeVar, NamedTuple
 import logging
 from bitarray import bitarray
 from mmap import mmap, ACCESS_READ, ACCESS_WRITE
@@ -23,6 +23,12 @@ BlockT = TypeVar('BlockT', bound=AbstractBlock)
 AccessT = Literal['r', 'w', 'a', 'f']
 
 
+class AccessLogEntry(NamedTuple):
+    access_type: AccessT
+    block_index: int
+    block_type: str
+
+
 class BlockDevice:
     _struct_2mg = "<4s4sHHI48x"
 
@@ -33,7 +39,7 @@ class BlockDevice:
         self.mm = mmap(f.fileno(), 0, access=access)
         #TODO mmap
         self.skip = 0
-        self._access_log: list[tuple[AccessT, int]] = []
+        self._access_log: list[AccessLogEntry] = []
 
         if source.suffix.lower() == '.2mg':
             # 2mg files contain a 64 byte header before the volume data
@@ -56,9 +62,7 @@ class BlockDevice:
 
         self.bit_map_pointer = bit_map_pointer     # updated via set_free_map below
         k = block_size_bits + 3
-        bit_map_blocks =  ((self.total_blocks-1) >> k) + 1
-
-        self.free_map = bitarray(bit_map_blocks << k)
+        self.free_map = bitarray(self.bitmap_blocks << k)
         self.free_map[:self.total_blocks] = 1
 
     def __del__(self):
@@ -90,30 +94,50 @@ class BlockDevice:
     def blocks_free(self) -> int:
         return sum(self.free_map)
 
+    @property
+    def bitmap_blocks(self) -> int:
+        """Number of blocks used by the volume bitmap."""
+        k = block_size_bits + 3
+        return ((self.total_blocks - 1) >> k) + 1
+
     def mark_session(self) -> int:
         return len(self._access_log)
 
     def get_access_log(self, access_types: str, mark: int=0) -> list[int]:
-        return [i for (t, i) in self._access_log[mark:] if t in access_types]
+        return [entry.block_index for entry in self._access_log[mark:] if entry.access_type in access_types]
+
+    def get_typed_access_log(self, access_types: str, mark: int=0) -> list[tuple[int, str]]:
+        """Get access log entries with block types for given access types."""
+        return [(entry.block_index, entry.block_type) for entry in self._access_log[mark:] if entry.access_type in access_types]
+
+    def write_access_log(self, log_path: Path):
+        """Write access log to file."""
+        with open(log_path, 'w') as f:
+            for entry in self._access_log:
+                f.write(f"{entry.access_type} {entry.block_index:04x} {entry.block_type}\n")
 
     def dump_access_log(self):
         return '\n'.join(
-            ' '.join(t + f"{idx:<4x}".upper() for (t, idx) in self._access_log[k:k+12])
+            ' '.join(entry.access_type + f"{entry.block_index:<4x}".upper() + (f":{entry.block_type}" if entry.block_type else "")
+                     for entry in self._access_log[k:k+12])
              for k in range(0, len(self._access_log), 12)
         )
 
-    def read_block_type(self, block_index: int, factory: Type[BlockT], unsafe: bool=False) -> BlockT:
-        return factory.unpack(self.read_block(block_index, unsafe))
+    def read_typed_block(self, block_index: int, factory: Type[BlockT], unsafe: bool=False) -> BlockT:
+        return factory.unpack(self.read_block(block_index, unsafe, block_type=factory.__name__))
 
-    def read_block(self, block_index: int, unsafe: bool=False) -> bytes:
+    def read_block(self, block_index: int, unsafe: bool=False, block_type: str='') -> bytes:
         assert unsafe or not self.free_map[block_index], f"read_block({block_index}) on free block"
-        self._access_log.append(('r', block_index))
+        self._access_log.append(AccessLogEntry('r', block_index, block_type))
         start = block_index * block_size + self.skip
         return self.mm[start:start+block_size]
 
-    def write_block(self, block_index: int, data: bytes):
+    def write_typed_block(self, block_index: int, block: AbstractBlock):
+        self.write_block(block_index, block.pack(), block_type=type(block).__name__)
+
+    def write_block(self, block_index: int, data: bytes, block_type: str=''):
         self.free_map[block_index] = False
-        self._access_log.append(('w', block_index))
+        self._access_log.append(AccessLogEntry('w', block_index, block_type))
         start = block_index*block_size + self.skip
         self.mm[start:start+block_size] = data
 
@@ -121,26 +145,25 @@ class BlockDevice:
         block_index = self._next_free_block()
         assert block_index is not None, "allocate_block: Device full!"
         self.free_map[block_index] = False
-        self._access_log.append(('a', block_index))
+        self._access_log.append(AccessLogEntry('a', block_index, ''))
         return block_index
 
     def free_block(self, block_index: int):
         assert not self.free_map[block_index], f"free_block({block_index}): already free"
         self.write_block(block_index, bytes(block_size))
         self.free_map[block_index] = True
-        self._access_log.append(('f', block_index))
+        self._access_log.append(AccessLogEntry('f', block_index, ''))
 
     def reset_free_map(self, block_index: int):
         self.bit_map_pointer = block_index
         k = block_size_bits + 3
-        n = len(self.free_map) >> k
-        for i in range(n):
-            b = self.read_block_type(i + block_index, BitmapBlock, unsafe=True)
+        for i in range(self.bitmap_blocks):
+            b = self.read_typed_block(i + block_index, BitmapBlock, unsafe=True)
             self.free_map[i<<k : (i+1)<<k] = b.free_map
-        logging.debug(f"Read {n} bitmask blocks with {len(self.free_map)} bits covering {self.total_blocks} volume blocks")
+        logging.debug(f"Read {self.bitmap_blocks} bitmask blocks with {len(self.free_map)} bits covering {self.total_blocks} volume blocks")
         assert self.total_blocks <= len(self.free_map) < self.total_blocks + (block_size << 3), \
             f"reset_free_map: unexpected free_map length {len(self.free_map)} for {self.total_blocks} blocks"
-        if any(self.free_map[:block_index+n]):
+        if any(self.free_map[:block_index+self.bitmap_blocks]):
             logging.warning("bitmap shows free space in volume prologue")
         if any(self.free_map[self.total_blocks:]):
             logging.warning("bitmap shows free space past end of volume")
@@ -148,13 +171,12 @@ class BlockDevice:
     def write_free_map(self):
         assert self.bit_map_pointer is not None, "Device bit_map_pointer not set"
         start = self.bit_map_pointer
-        n = len(self.free_map) >> (block_size_bits + 3)
-        self.free_map[start:start+n] = False    # mark self used
+        self.free_map[start:start+self.bitmap_blocks] = False    # mark self used
         bits_per_block = 1 << (block_size_bits + 3)
-        for i in range(n):
+        for i in range(self.bitmap_blocks):
             start = i*bits_per_block
             blk = BitmapBlock(free_map=self.free_map[start:start+bits_per_block])
-            self.write_block(i + self.bit_map_pointer, blk.pack())
+            self.write_typed_block(i + self.bit_map_pointer, blk)
 
     def _next_free_block(self) -> Optional[int]:
         return next(

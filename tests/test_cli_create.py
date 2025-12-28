@@ -62,3 +62,45 @@ def test_bootloader_roundtrip(tmp_path: Path):
     # Remaining bytes should be zero padding
     if len(original_data) < 1024:
         assert exported_data[len(original_data):] == bytes(1024 - len(original_data))
+
+
+def test_export_files_and_loader(tmp_path: Path):
+    """Test exporting files and loader in a single command"""
+    vol = tmp_path / "boot.po"
+    loader_file = "images/bootloader.bin"
+
+    # Create volume with loader and some files
+    result = runner.invoke(app, ["create", str(vol), "-l", loader_file])
+    assert result.exit_code == 0
+
+    # Import some test files
+    test_file1 = tmp_path / "test1.txt"
+    test_file2 = tmp_path / "test2.txt"
+    test_file1.write_text("Test content 1")
+    test_file2.write_text("Test content 2")
+
+    result = runner.invoke(app, ["import", str(vol), str(test_file1), str(test_file2), "/"])
+    assert result.exit_code == 0
+
+    # Export files and loader in one command
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    loader_exported = tmp_path / "exported.bin"
+
+    result = runner.invoke(app, [
+        "export", str(vol),
+        "/TEST1.TXT", "/TEST2.TXT",
+        str(export_dir),
+        "--loader", str(loader_exported)
+    ])
+    assert result.exit_code == 0
+
+    # Verify files were exported
+    assert (export_dir / "TEST1.TXT").exists()
+    assert (export_dir / "TEST2.TXT").exists()
+    assert (export_dir / "TEST1.TXT").read_text() == "Test content 1"
+    assert (export_dir / "TEST2.TXT").read_text() == "Test content 2"
+
+    # Verify loader was exported
+    assert loader_exported.exists()
+    assert len(loader_exported.read_bytes()) == 1024

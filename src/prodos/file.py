@@ -148,7 +148,9 @@ class PlainFile(FileBase):
         n = len(data)
         assert n <= chunk_size, f"_write_simple_file: size {n} exceeds chunk {chunk_size}"
         if chunk_size == block_size:
+            # pad to full block and write raw data
             out = data + bytes(block_size-n)
+            self.device.write_block(index, out)
         else:
             chunk_size >>= 8
             ixs: list[int] = []
@@ -160,8 +162,7 @@ class PlainFile(FileBase):
                     if any(blk)
                     else 0
                 )
-            out = IndexBlock(block_pointers=ixs).pack()
-        self.device.write_block(index, out)
+            self.device.write_typed_block(index, IndexBlock(block_pointers=ixs))
         return index
 
     @classmethod
@@ -196,7 +197,7 @@ class PlainFile(FileBase):
             logging.debug(f"read_simple_file block {block_index} -> {length} bytes")
             return device.read_block(block_index)[:length]
 
-        idx = device.read_block_type(block_index, IndexBlock)
+        idx = device.read_typed_block(block_index, IndexBlock)
         chunk_bits = level_bits - 8
         chunk_size = 1 << chunk_bits
         n = ((length-1) >> chunk_bits) + 1
