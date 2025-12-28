@@ -1,0 +1,1 @@
+Example blocks pulled from ./images/GSOSv6.0.1.po

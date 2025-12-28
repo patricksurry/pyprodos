@@ -53,6 +53,8 @@ class StorageType(IntEnum):
     seedling = 1
     sapling = 2
     tree = 3
+    pascal_area = 4
+    extended = 5
     dir = 0xD
     subdirhdr = 0xE
     voldirhdr = 0xF
@@ -519,6 +521,62 @@ class FileEntry(NamedEntry):
             **shallow_dict(d)
         )
 
+
+@dataclass(kw_only=True)
+class ExtendedForkEntry:
+    """
+    Mini-entry for data fork or resource fork in an extended file (storage type $5).
+
+    Each fork has an 8-byte mini-entry in the extended key block:
+    - Offset +0: storage_type (1 byte)
+    - Offset +1: key_block (2 bytes)
+    - Offset +3: blocks_used (2 bytes)
+    - Offset +5: EOF (3 bytes, little-endian: 2-byte word + 1 byte)
+
+    Followed by Finder info (36 bytes).
+    """
+    SIZE: ClassVar = 44  # 8 bytes mini-entry + 36 bytes finder info
+    _struct: ClassVar = "<BHHHB36s"
+
+    storage_type: StorageType
+    key_block: int          # block address of fork's key block
+    blocks_used: int        # total blocks for this fork
+    eof: int                # end of file (3 bytes, 0-$FFFFFF)
+    finder_info: bytes = bytes(36)     # 36 bytes of Finder info (optional HFS data)
+
+    def pack(self) -> bytes:
+        assert len(self.finder_info) == 36, \
+            f"ExtendedForkEntry.pack: finder_info should be 36 bytes, got {len(self.finder_info)}"
+        return struct.pack(
+            ExtendedForkEntry._struct,
+            self.storage_type,
+            self.key_block,
+            self.blocks_used,
+            self.eof & 0xffff,      # EOF low word (2 bytes)
+            self.eof >> 16,         # EOF high byte (1 byte)
+            self.finder_info,
+        )
+
+    @classmethod
+    def unpack(cls, buf: bytes) -> Self:
+        (
+            storage_type,
+            key_block,
+            blocks_used,
+            eofw,
+            eof3,
+            finder_info,
+        ) = struct.unpack(cls._struct, buf[:cls.SIZE])
+
+        return cls(
+            storage_type=storage_type,
+            key_block=key_block,
+            blocks_used=blocks_used,
+            eof=eofw | (eof3 << 16),
+            finder_info=finder_info
+        )
+
+
 # empty file entry to fill unused slots
 FileEntry.empty = FileEntry(
     storage_type = StorageType.empty,
@@ -558,4 +616,3 @@ FileEntry.root = FileEntry(
 assert VolumeDirectoryHeaderEntry.SIZE == entry_length
 assert SubdirectoryHeaderEntry.SIZE == entry_length
 assert FileEntry.SIZE == entry_length
-

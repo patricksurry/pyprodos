@@ -6,7 +6,8 @@ import logging
 
 from .globals import entry_length, entries_per_block, block_size
 from .metadata import FileEntry, NamedEntry, StorageType, \
-    DirectoryEntry, DirectoryHeaderEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry
+    DirectoryEntry, DirectoryHeaderEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry, \
+    ExtendedForkEntry
 
 
 @dataclass(kw_only=True)
@@ -32,13 +33,6 @@ class DirectoryBlock(AbstractBlock):
     next_pointer: int
     header_entry: DirectoryHeaderEntry | None = None
     file_entries: list[FileEntry]
-
-    def __repr__(self):
-        s = f"<{self.prev_pointer:d}:{self.next_pointer:d}>\n"
-        if self.header_entry:
-            s += f"{self.header_entry}\n"
-        s += "\n".join(repr(f) for f in self.file_entries)
-        return s
 
     def pack(self) -> bytes:
         data = struct.pack(DirectoryBlock._struct, self.prev_pointer, self.next_pointer)
@@ -72,6 +66,7 @@ class DirectoryBlock(AbstractBlock):
 
         if any(buf[offset:]):
             logging.warning("DirectoryBlock: non-zero bytes in padding")
+
         return cls(
             prev_pointer=prev_pointer,
             next_pointer=next_pointer,
@@ -120,3 +115,34 @@ class BitmapBlock(AbstractBlock):
         bits = bitarray()
         bits.frombytes(buf)
         return cls(free_map=bits)
+
+
+@dataclass(kw_only=True)
+class ExtendedKeyBlock(AbstractBlock):
+    """
+    Extended key block for storage type $5 (GS/OS extended files),
+    containing the data and resource fork entries at +$000 and +$100
+    See https://prodos8.com/docs/technote/25/
+    """
+    data_fork: ExtendedForkEntry
+    resource_fork: ExtendedForkEntry
+
+    def pack(self) -> bytes:
+        pad = 256 - ExtendedForkEntry.SIZE
+        # Pack data fork at offset 0
+        data = (
+            self.data_fork.pack()
+            + bytes(pad)
+            + self.resource_fork.pack()
+            + bytes(pad)
+        )
+        assert len(data) == block_size, \
+            f"ExtendedKeyBlock.pack: bad size {len(data)} != {block_size}"
+        return data
+
+    @classmethod
+    def unpack(cls, buf: bytes) -> Self:
+        return cls(
+            data_fork=ExtendedForkEntry.unpack(buf),
+            resource_fork=ExtendedForkEntry.unpack(buf[256:])
+        )
