@@ -20,12 +20,16 @@ def test_create_2mg(tmp_path: Path):
 
 
 def test_create_with_loader(tmp_path: Path):
-    """Test creating a volume with a boot loader"""
+    """Test creating a volume and importing a boot loader"""
     vol = tmp_path / "boot.po"
     loader = "images/bootloader.bin"
 
-    # Create volume with loader
-    result = runner.invoke(app, ["create", str(vol), "-n", "BOOT", "-l", loader])
+    # Create volume
+    result = runner.invoke(app, ["create", str(vol), "-n", "BOOT"])
+    assert result.exit_code == 0
+
+    # Import loader
+    result = runner.invoke(app, ["import", str(vol), "-l", loader, "/"])
     assert result.exit_code == 0
 
     # Verify volume was created
@@ -40,8 +44,12 @@ def test_bootloader_roundtrip(tmp_path: Path):
     loader_original = "images/bootloader.bin"
     loader_exported = tmp_path / "exported_loader.bin"
 
-    # Create volume with loader
-    result = runner.invoke(app, ["create", str(vol), "-l", loader_original])
+    # Create volume
+    result = runner.invoke(app, ["create", str(vol)])
+    assert result.exit_code == 0
+
+    # Import loader
+    result = runner.invoke(app, ["import", str(vol), "-l", loader_original, "/"])
     assert result.exit_code == 0
 
     # Export the loader
@@ -69,17 +77,17 @@ def test_export_files_and_loader(tmp_path: Path):
     vol = tmp_path / "boot.po"
     loader_file = "images/bootloader.bin"
 
-    # Create volume with loader and some files
-    result = runner.invoke(app, ["create", str(vol), "-l", loader_file])
+    # Create volume
+    result = runner.invoke(app, ["create", str(vol)])
     assert result.exit_code == 0
 
-    # Import some test files
+    # Import loader and some test files
     test_file1 = tmp_path / "test1.txt"
     test_file2 = tmp_path / "test2.txt"
     test_file1.write_text("Test content 1")
     test_file2.write_text("Test content 2")
 
-    result = runner.invoke(app, ["import", str(vol), str(test_file1), str(test_file2), "/"])
+    result = runner.invoke(app, ["import", str(vol), "-l", loader_file, str(test_file1), str(test_file2), "/"])
     assert result.exit_code == 0
 
     # Export files and loader in one command

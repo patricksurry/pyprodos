@@ -31,6 +31,9 @@ def get_recursive(recursive: Annotated[bool, typer.Option("--recursive", "-r", h
 def get_path(path: Annotated[str, Argument(help="ProDOS path (e.g., /DIR/FILE)")]) -> str:
     return path
 
+def get_optional_path(path: Annotated[str | None, Argument(help="ProDOS path (e.g., /DIR/FILE)")] = None) -> str | None:
+    return path
+
 def get_optional_paths(paths: Annotated[list[str], Argument(help="ProDOS path(s) (e.g., /DIR/FILE)", default_factory=list)]) -> list[str]:
     return paths
 
@@ -43,7 +46,7 @@ def get_volume_path(volume: Annotated[Path, Argument(help="Path to disk image fi
 def get_output(target: Annotated[Path|None, Option("--output", "-o", help="Output to a copy of the volume")] = None) -> Path|None:
     return target
 
-def get_host_paths(paths: Annotated[list[str], Argument(help="Host file path(s)")]) -> list[str]:
+def get_host_paths(paths: Annotated[list[str], Argument(help="Host file path(s)", default_factory=list)]) -> list[str]:
     return paths
 
 @contextmanager
@@ -72,7 +75,6 @@ def create(
         size: Annotated[int, Option("--size", "-s", help="Total blocks (512 bytes/block)")] = 65535,
         name: Annotated[str, Option("--name", "-n", help="Volume name (max 15 chars)")] = 'PYP8',
         format: Annotated[DeviceFormat, Option("--format", "-t", help="Disk image format")] = DeviceFormat.prodos,
-        loader: Annotated[Path | None, Option("--loader", "-l", help="Boot loader binary file")] = None,
         force: bool = Depends(get_force),
         log: Path|None = Depends(get_log),
     ):
@@ -93,7 +95,7 @@ def create(
         volume_name=name,
         total_blocks=size,
         format=format,
-        loader_path=loader,
+        loader_path=None,
     )
 
     if log:
@@ -389,8 +391,9 @@ def rmdir(
 def host_import(
         source: Path = Depends(get_volume_path),
         src: list[str] = Depends(get_host_paths),
-        dst: str = Depends(get_path),
+        dst: str | None = Depends(get_optional_path),
         output: Path|None = Depends(get_output),
+        loader: Annotated[Path | None, Option("--loader", "-l", help="Import boot loader from file")] = None,
         force: bool = Depends(get_force),
         log: Path|None = Depends(get_log),
     ):
@@ -399,8 +402,25 @@ def host_import(
 
     Import single host file to target file, or one or more files to target directory.
     Directories are not imported: use host globbing to expand as file lists.
+    Use --loader to import a boot loader to the volume.
     """
     with open_volume(source, output, mode='rw', log=log) as volume:
+        # Handle loader import
+        if loader:
+            volume.write_loader(loader)
+            if not src:
+                # Only loader import requested
+                return
+
+        # Handle file import
+        if not src:
+            print("Error: file paths required when not using --loader")
+            raise typer.Exit(1)
+
+        if dst is None:
+            print("Error: destination path required when importing files")
+            raise typer.Exit(1)
+
         bad = [f for f in src if not path.isfile(f)]
         if bad:
             print(f"Not regular host files: {', '.join(bad)}")

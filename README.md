@@ -36,11 +36,11 @@ ProDOS should execute the first `.SYSTEM` file it finds after it boots.
 
 Now we'll make a new 140K (280 block) floppy boot disk:
 
-    % prodos create boot.po --name MYVOL --size 280 --loader loader.bin
+    % prodos create boot.po --name MYVOL --size 280
 
-and then import our boot files and check the listing:
+then import the system files and bootloader and check the listing:
 
-    % prodos import boot.po PRODOS BASIC.SYSTEM /
+    % prodos import boot.po --loader loader.bin PRODOS BASIC.SYSTEM /
 
     % prodos ls boot.po
 
