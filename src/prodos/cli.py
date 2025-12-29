@@ -12,7 +12,7 @@ from typer_di import Depends, TyperDI
 
 from prodos.device import DeviceFormat, DeviceMode
 from prodos.file import PlainFile, legal_path
-from prodos.metadata import FileEntry
+from prodos.metadata import FileEntry, StorageType
 from prodos.volmap import format_block_map, format_legend, walk_volume
 from prodos.volume import Volume
 
@@ -503,8 +503,18 @@ def host_export(
             raise typer.Exit(1)
 
         for e in entries:
+            if e.is_dir:
+                print(f"Omitting directory {e.file_name}")
+                continue
+
             out = dst if not is_dir else path.join(dst, e.file_name)
-            volume.read_simple_file(e).export(out)
+            if e.is_plain_file:
+                volume.read_simple_file(e).export(out)
+            elif e.storage_type == StorageType.extended:
+                volume.read_extended_file(e).export(out)
+            else:
+                print(f"Unsupported file type {e.storage_type:x} for {e.file_name}")
+                continue
 
 
 if __name__ == "__main__":

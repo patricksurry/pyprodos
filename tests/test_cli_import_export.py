@@ -49,6 +49,38 @@ def test_export_to_dir(tmp_path: Path):
     assert "minor update" in target.read_text()
 
 
+def test_export_extended_file(tmp_path: Path):
+    """Test exporting type 5 (extended) files with data and resource forks"""
+    result = runner.invoke(app, ["export", "images/GSOSv6.0.1.po", "GSHK", str(tmp_path)])
+    assert result.exit_code == 0
+
+    # Extended files export to three separate files
+    data_file = tmp_path / "GSHK.data"
+    rsrc_file = tmp_path / "GSHK.rsrc"
+    meta_file = tmp_path / "GSHK.meta"
+
+    assert data_file.exists(), "Data fork should be exported"
+    assert rsrc_file.exists(), "Resource fork should be exported"
+    assert meta_file.exists(), "Metadata should be exported"
+
+    # Verify approximate sizes (data fork is largest)
+    assert data_file.stat().st_size == 112443, "Data fork should be ~110KB"
+    assert rsrc_file.stat().st_size == 18063, "Resource fork should be ~18KB"
+    assert meta_file.stat().st_size == 512, "Metadata should be exactly 512 bytes"
+
+
+def test_export_directory_skipped(tmp_path: Path):
+    """Test that directories are skipped during export with a message"""
+    result = runner.invoke(app, ["export", "images/GSOSv6.0.1.po", "ICONS", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Omitting directory" in result.stdout
+    assert "ICONS" in result.stdout
+
+    # No files should be created for the directory
+    assert not (tmp_path / "ICONS").exists()
+    assert not (tmp_path / "ICONS.data").exists()
+
+
 def test_import_target_not_found(vol_with_dir: Path, tmp_path: Path) -> None:
     """Test import fails when target directory doesn't exist"""
     dummy_file = tmp_path / "test.txt"

@@ -96,9 +96,6 @@ class PlainFile(FileBase):
     """
     data: bytes
 
-    def export(self, dst: str):
-        open(dst, 'wb').write(self.data)
-
     @property
     def file_size(self) -> int:
         return len(self.data)
@@ -112,6 +109,9 @@ class PlainFile(FileBase):
             return StorageType.sapling
         else:
             return StorageType.tree
+
+    def export(self, dst: str):
+        open(dst, 'wb').write(self.data)
 
     def write(self) -> int:
         """
@@ -223,6 +223,7 @@ class ExtendedFile(FileBase):
     The key_pointer points to an ExtendedKeyBlock containing fork information.
     Each fork (data and resource) is stored as a separate simple file structure.
     """
+    ext_block: ExtendedKeyBlock
     data_fork: PlainFile
     resource_fork: PlainFile
 
@@ -234,6 +235,15 @@ class ExtendedFile(FileBase):
     def file_size(self) -> int:
         """ProDOS only counts the extended key block, not the individual file sizes"""
         return block_size
+
+    def export(self, dst: str):
+        open(dst + '.data', 'wb').write(self.data_fork.data)
+        open(dst + '.rsrc', 'wb').write(self.resource_fork.data)
+        open(dst + '.meta', 'wb').write(self.ext_block.pack())
+
+#TODO Not implemented yet
+#    def write(self) -> int:
+#        ...
 
     @classmethod
     def from_entry(cls, device: BlockDevice, entry: FileEntry) -> Self:
@@ -265,6 +275,7 @@ class ExtendedFile(FileBase):
             device=device,
             file_name=entry.file_name,
             file_type=entry.file_type,
+            ext_block=ext_block,
             data_fork=data_fork,
             resource_fork=resource_fork,
             block_list=[entry.key_pointer] # only the wrapper block, not the files themselves
