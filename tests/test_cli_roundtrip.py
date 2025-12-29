@@ -1,9 +1,9 @@
-from typer.testing import CliRunner
 from os import path
 from pathlib import Path
 
-from prodos.cli import app
+from typer.testing import CliRunner
 
+from prodos.cli import app
 
 runner = CliRunner()
 

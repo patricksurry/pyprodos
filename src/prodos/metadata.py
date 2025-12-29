@@ -1,11 +1,15 @@
-from typing import ClassVar, Self, Final, Protocol, Any
-from dataclasses import dataclass, fields, field
-from enum import IntEnum
-import struct
 import logging
+import struct
+from dataclasses import dataclass, field, fields
+from enum import IntEnum
+from typing import Any, ClassVar, Final, Protocol, Self
 
-from .globals import entry_length, entries_per_block, \
-    volume_key_block, volume_directory_length
+from .globals import (
+    entries_per_block,
+    entry_length,
+    volume_directory_length,
+    volume_key_block
+)
 from .p8datetime import P8DateTime
 
 """
@@ -253,13 +257,13 @@ class VolumeDirectoryHeaderEntry(DirectoryEntry):
     SIZE: ClassVar = DirectoryEntry.SIZE + 4
     _struct: ClassVar = "<HH"
 
-    bit_map_pointer: int        # first block of free map
+    bitmap_pointer: int        # first block of free map
     total_blocks: int           # total blocks on device
 
     def pack(self) -> bytes:
         return super().pack() + struct.pack(
             VolumeDirectoryHeaderEntry._struct,
-            self.bit_map_pointer,
+            self.bitmap_pointer,
             self.total_blocks,
         )
 
@@ -270,11 +274,11 @@ class VolumeDirectoryHeaderEntry(DirectoryEntry):
         assert d.storage_type == StorageType.voldirhdr, \
             f"VolumeDirectoryHeaderEntry bad storage type {d.storage_type:x}"
         (
-            bit_map_pointer,
+            bitmap_pointer,
             total_blocks
         ) = struct.unpack(cls._struct, buf[n:])
         return cls(
-            bit_map_pointer=bit_map_pointer,
+            bitmap_pointer=bitmap_pointer,
             total_blocks=total_blocks,
             **shallow_dict(d)
         )
@@ -574,6 +578,24 @@ class ExtendedForkEntry:
             blocks_used=blocks_used,
             eof=eofw | (eof3 << 16),
             finder_info=finder_info
+        )
+
+    def as_file_entry(self, file_name: str = '', file_type: int = 0) -> FileEntry:
+        """Create a virtual FileEntry for use with PlainFile.from_entry"""
+        return FileEntry(
+            storage_type=self.storage_type,
+            file_name=file_name,
+            file_type=file_type,
+            key_pointer=self.key_block,
+            blocks_used=self.blocks_used,
+            eof=self.eof,
+            created=P8DateTime.now(),   #TODO propagate from parent FileEntry?
+            version=0,
+            min_version=0,
+            access=0,
+            aux_type=0,
+            last_mod=P8DateTime.now(),
+            header_pointer=0,
         )
 
 

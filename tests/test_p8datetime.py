@@ -1,5 +1,6 @@
-from prodos.p8datetime import P8DateTime
 from datetime import datetime
+
+from prodos.p8datetime import P8DateTime
 
 
 def test_roundtrip():

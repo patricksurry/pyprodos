@@ -1,13 +1,15 @@
 """Tests for BlockDevice methods including access logging."""
-import pytest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Iterator
 
-from prodos.device import BlockDevice, DeviceFormat, AccessLogEntry
+import pytest
+from bitarray import bitarray
+
 from prodos.blocks import BitmapBlock, DirectoryBlock
-from prodos.volume import Volume
+from prodos.device import AccessLogEntry, BlockDevice, DeviceFormat
 from prodos.globals import block_size
+from prodos.volume import Volume
 
 
 @pytest.fixture
@@ -62,7 +64,7 @@ def test_read_typed_block_logs_block_type(test_device: BlockDevice):
     assert isinstance(blk, DirectoryBlock)
 
     # Check the access log
-    log_entries = test_device._access_log[mark:]
+    log_entries = test_device._access_log[mark:]    # pyright: ignore[reportPrivateUsage]
     assert len(log_entries) == 1
     assert log_entries[0].access_type == 'r'
     assert log_entries[0].block_index == 2
@@ -74,7 +76,6 @@ def test_write_typed_block_logs_block_type(empty_device: BlockDevice):
     mark = empty_device.mark_session()
 
     # Create and write a bitmap block
-    from bitarray import bitarray
     bits = bitarray(block_size * 8)
     bits[:] = 1
     blk = BitmapBlock(free_map=bits)
@@ -82,7 +83,7 @@ def test_write_typed_block_logs_block_type(empty_device: BlockDevice):
     empty_device.write_typed_block(10, blk)
 
     # Check the access log
-    log_entries = empty_device._access_log[mark:]
+    log_entries = empty_device._access_log[mark:]   # pyright: ignore[reportPrivateUsage]
     assert len(log_entries) == 1
     assert log_entries[0].access_type == 'w'
     assert log_entries[0].block_index == 10
@@ -98,7 +99,7 @@ def test_write_block_without_type(empty_device: BlockDevice):
     empty_device.write_block(10, data)
 
     # Check the access log
-    log_entries = empty_device._access_log[mark:]
+    log_entries = empty_device._access_log[mark:]   # pyright: ignore[reportPrivateUsage]
     assert len(log_entries) == 1
     assert log_entries[0].access_type == 'w'
     assert log_entries[0].block_index == 10
@@ -114,7 +115,7 @@ def test_write_block_with_type(empty_device: BlockDevice):
     empty_device.write_block(10, data, block_type='CustomBlock')
 
     # Check the access log
-    log_entries = empty_device._access_log[mark:]
+    log_entries = empty_device._access_log[mark:]   # pyright: ignore[reportPrivateUsage]
     assert len(log_entries) == 1
     assert log_entries[0].access_type == 'w'
     assert log_entries[0].block_index == 10
@@ -128,7 +129,7 @@ def test_allocate_block_logs_allocation(empty_device: BlockDevice):
     block_idx = empty_device.allocate_block()
 
     # Check the access log
-    log_entries = empty_device._access_log[mark:]
+    log_entries = empty_device._access_log[mark:]   # pyright: ignore[reportPrivateUsage]
     assert len(log_entries) == 1
     assert log_entries[0].access_type == 'a'
     assert log_entries[0].block_index == block_idx
@@ -145,7 +146,7 @@ def test_free_block_logs_free(empty_device: BlockDevice):
     empty_device.free_block(block_idx)
 
     # Check the access log - should have write (zeroing) and free
-    log_entries = empty_device._access_log[mark:]
+    log_entries = empty_device._access_log[mark:]   # pyright: ignore[reportPrivateUsage]
     assert len(log_entries) >= 2
 
     # Last entry should be the free operation
@@ -237,7 +238,6 @@ def test_mark_session_tracks_position(empty_device: BlockDevice):
 
 def test_write_typed_block_round_trip(empty_device: BlockDevice):
     """Test that data written with write_typed_block can be read back."""
-    from bitarray import bitarray
 
     # Create a bitmap block with specific pattern
     bits = bitarray(block_size * 8)

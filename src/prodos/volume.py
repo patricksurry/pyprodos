@@ -1,15 +1,24 @@
-from typing import Self
-from pathlib import Path
 import logging
+from pathlib import Path
+from typing import Self
 
-from .globals import volume_key_block, volume_directory_length, \
-    block_size, entries_per_block
-from .device import BlockDevice, DeviceFormat, DeviceMode
-from .metadata import P8DateTime, FileEntry, VolumeDirectoryHeaderEntry, \
-    access_byte, StorageType
 from .blocks import DirectoryBlock
+from .device import BlockDevice, DeviceFormat, DeviceMode
 from .directory import DirectoryFile
-from .file import PlainFile
+from .file import ExtendedFile, PlainFile
+from .globals import (
+    block_size,
+    entries_per_block,
+    volume_directory_length,
+    volume_key_block
+)
+from .metadata import (
+    FileEntry,
+    P8DateTime,
+    StorageType,
+    VolumeDirectoryHeaderEntry,
+    access_byte
+)
 
 
 class Volume:
@@ -32,7 +41,7 @@ class Volume:
         vh = vkb.header_entry
         assert vh.total_blocks == device.total_blocks, \
             f"Volume directory header block count {vh.total_blocks} != device block count {device.total_blocks}"
-        self.device.reset_free_map(vh.bit_map_pointer)
+        self.device.reset_free_map(vh.bitmap_pointer)
 
     @classmethod
     def from_file(cls, source: Path, mode: DeviceMode='ro') -> Self:
@@ -46,7 +55,7 @@ class Volume:
             format: DeviceFormat = DeviceFormat.prodos,
             loader_path: Path | None = None
         ) -> Self:
-        device = BlockDevice.create(dest, total_blocks, bit_map_pointer=6, format=format)
+        device = BlockDevice.create(dest, total_blocks, bit_map_pointer=6, format=format) #TODO what is this magic 6
         # reserve two blocks for loader
         device.allocate_block()
         device.allocate_block()
@@ -60,7 +69,7 @@ class Volume:
                 min_version = 0,
                 access = access_byte(),
                 file_count = 0,
-                bit_map_pointer = 6,
+                bitmap_pointer = 6,    #TODO also here
                 total_blocks = total_blocks,
             ),
             file_name = volume_name.upper(), #TODO can we avoid the duplication with header?
@@ -92,6 +101,9 @@ class Volume:
     def read_simple_file(self, entry: FileEntry) -> PlainFile:
         return PlainFile.from_entry(self.device, entry)
 
+    def read_extended_file(self, entry: FileEntry) -> ExtendedFile:
+        return ExtendedFile.from_entry(self.device, entry)
+
     def write_loader(self, loader_path: Path):
         data = open(loader_path, 'rb').read()
         if len(data) > 2 * block_size:
@@ -104,9 +116,7 @@ class Volume:
 
     def read_loader(self) -> bytes:
         """Read the boot loader from blocks 0 and 1."""
-        block0 = self.device.read_block(0)
-        block1 = self.device.read_block(1)
-        return block0 + block1
+        return self.device.read_block(0) + self.device.read_block(1)
 
     def path_entry(self, path: str) -> FileEntry|None:
         entries = self.glob_paths([path])

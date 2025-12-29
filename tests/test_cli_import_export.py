@@ -1,7 +1,9 @@
-from pathlib import Path
+import traceback
 from os import path
-from typer.testing import CliRunner
+from pathlib import Path
+
 import pytest
+from typer.testing import CliRunner
 
 from prodos.cli import app
 
@@ -124,8 +126,6 @@ def test_import_tree_file_and_show_map(tmp_path: Path) -> None:
 
     # Use the same ProDOS image file that works at command line
     source_file = Path("images/ProDOS_2_4_3.po")
-    if not source_file.exists():
-        pytest.skip(f"Test file {source_file} not found")
 
     # Import the tree file (same file that works at command line)
     result = runner.invoke(app, ["import", str(vol), str(source_file), "TREE.DAT"])
@@ -148,7 +148,6 @@ def test_import_tree_file_and_show_map(tmp_path: Path) -> None:
         print(f"Exit code: {result.exit_code}")
         print(f"Stdout:\n{result.stdout}")
         if result.exception:
-            import traceback
             print(f"Exception:\n{''.join(traceback.format_exception(type(result.exception), result.exception, result.exception.__traceback__))}")
     assert result.exit_code == 0, f"info --map failed: {result.stdout}"
 
@@ -208,7 +207,6 @@ def test_import_synthetic_tree_file(tmp_path: Path) -> None:
         print(f"Exit code: {result.exit_code}")
         print(f"Stdout:\n{result.stdout}")
         if result.exception:
-            import traceback
             print(f"Exception:\n{''.join(traceback.format_exception(type(result.exception), result.exception, result.exception.__traceback__))}")
     assert result.exit_code == 0, f"info --map failed: {result.stdout}"
 

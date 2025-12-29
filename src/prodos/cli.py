@@ -1,19 +1,20 @@
-from typing import Optional, Annotated
 import logging
-import typer
-from typer import Option, Argument
-from typer_di import TyperDI, Depends
-import shutil
 import os
+import shutil
+from contextlib import contextmanager
 from os import path
 from pathlib import Path
-from contextlib import contextmanager
+from typing import Annotated, Optional
 
-from prodos.volume import Volume
+import typer
+from typer import Argument, Option
+from typer_di import Depends, TyperDI
+
 from prodos.device import DeviceFormat, DeviceMode
 from prodos.file import PlainFile, legal_path
 from prodos.metadata import FileEntry
-
+from prodos.volmap import format_block_map, format_legend, walk_volume
+from prodos.volume import Volume
 
 logging.basicConfig(level=logging.WARN)
 
@@ -115,7 +116,6 @@ def info(
         print(volume)
 
         if show_map:
-            from prodos.volmap import walk_volume, format_block_map, format_legend
             print("\nBlock usage map:")
             print()
             block_map = walk_volume(volume)

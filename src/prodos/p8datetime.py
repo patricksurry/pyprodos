@@ -1,6 +1,6 @@
-from typing import ClassVar, Self
 from dataclasses import dataclass
 from datetime import datetime
+from typing import ClassVar, Self
 
 
 @dataclass(kw_only=True, repr=False)

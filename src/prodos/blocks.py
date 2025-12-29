@@ -1,13 +1,21 @@
-from typing import ClassVar, Self, Optional
-from dataclasses import dataclass
-import struct
-from bitarray import bitarray
 import logging
+import struct
+from dataclasses import dataclass
+from typing import ClassVar, Optional, Self
 
-from .globals import entry_length, entries_per_block, block_size
-from .metadata import FileEntry, NamedEntry, StorageType, \
-    DirectoryEntry, DirectoryHeaderEntry, VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry, \
-    ExtendedForkEntry
+from bitarray import bitarray
+
+from .globals import block_size, entries_per_block, entry_length
+from .metadata import (
+    DirectoryEntry,
+    DirectoryHeaderEntry,
+    ExtendedForkEntry,
+    FileEntry,
+    NamedEntry,
+    StorageType,
+    SubdirectoryHeaderEntry,
+    VolumeDirectoryHeaderEntry
+)
 
 
 @dataclass(kw_only=True)

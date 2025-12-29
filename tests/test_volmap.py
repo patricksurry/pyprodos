@@ -1,14 +1,20 @@
 """Tests for volume block usage mapping and visualization."""
-import pytest
+import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import logging
 from typing import Iterator
 
+import pytest
+
 from prodos.device import BlockDevice
-from prodos.volume import Volume
-from prodos.volmap import walk_volume, BlockUsage, format_block_map, format_legend
 from prodos.file import PlainFile
+from prodos.volmap import (
+    BlockUsage,
+    format_block_map,
+    format_legend,
+    walk_volume
+)
+from prodos.volume import Volume
 
 
 @pytest.fixture

@@ -16,3 +16,5 @@ It includes an access log to watch how the higher level routines are using the d
 The ProDOS volume is defined in volume.py.
 There are helpers to manage files and directories in file.py and directory.py.
 
+Put imports at the top of source files, don't
+import within functions unless you have a specific need to do so.

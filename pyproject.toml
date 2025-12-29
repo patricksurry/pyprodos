@@ -32,6 +32,7 @@ dev = [
     "pytest>=8.4.2",
     "pytest-cov>=6.0.0",
     "pyright>=1.1.390",
+    "isort>=5.13.0",
 ]
 
 [project.urls]
@@ -43,3 +44,6 @@ prodos = "prodos.cli:app"
 
 [tool.setuptools.dynamic]
 version = {file = "VERSION"}
+
+[tool.isort]
+multi_line_output = 3

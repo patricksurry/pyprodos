@@ -1,9 +1,9 @@
 from pathlib import Path
-from typer.testing import CliRunner
+
 import pytest
+from typer.testing import CliRunner
 
 from prodos.cli import app
-
 
 runner = CliRunner(catch_exceptions=False)
 

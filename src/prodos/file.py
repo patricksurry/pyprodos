@@ -1,13 +1,13 @@
-from typing import Self
 import logging
 import re
 import string
 from dataclasses import dataclass, field
+from typing import Self
 
-from .globals import block_size_bits, block_size
-from .metadata import access_byte, FileEntry, StorageType
-from .blocks import IndexBlock
+from .blocks import ExtendedKeyBlock, IndexBlock
 from .device import BlockDevice
+from .globals import block_size, block_size_bits
+from .metadata import FileEntry, StorageType, access_byte
 from .p8datetime import P8DateTime
 
 
@@ -211,4 +211,61 @@ class PlainFile(FileBase):
                 length=min(length - j*chunk_size, chunk_size)
             )
             for j in range(0, n)
+        )
+
+
+@dataclass(kw_only=True)
+class ExtendedFile(FileBase):
+    """
+    Extended file (storage type $5) with separate data and resource forks.
+    See https://prodos8.com/docs/technote/25/
+
+    The key_pointer points to an ExtendedKeyBlock containing fork information.
+    Each fork (data and resource) is stored as a separate simple file structure.
+    """
+    data_fork: PlainFile
+    resource_fork: PlainFile
+
+    @property
+    def storage_type(self) -> StorageType:
+        return StorageType.extended
+
+    @property
+    def file_size(self) -> int:
+        """ProDOS only counts the extended key block, not the individual file sizes"""
+        return block_size
+
+    @classmethod
+    def from_entry(cls, device: BlockDevice, entry: FileEntry) -> Self:
+        """Read an extended file from a directory entry"""
+        assert entry.storage_type == StorageType.extended, \
+            f"ExtendedFile.from_entry: not extended file {entry}"
+
+        # Read the extended key block
+        ext_block = device.read_typed_block(entry.key_pointer, ExtendedKeyBlock)
+
+        # Use the adapter to create virtual FileEntry objects and read each fork
+        data_fork = PlainFile.from_entry(
+            device,
+            ext_block.data_fork.as_file_entry(
+                file_name=f"{entry.file_name}.data",
+                file_type=entry.file_type
+            )
+        )
+
+        resource_fork = PlainFile.from_entry(
+            device,
+            ext_block.resource_fork.as_file_entry(
+                file_name=f"{entry.file_name}.rsrc",
+                file_type=entry.file_type
+            )
+        )
+
+        return cls(
+            device=device,
+            file_name=entry.file_name,
+            file_type=entry.file_type,
+            data_fork=data_fork,
+            resource_fork=resource_fork,
+            block_list=[entry.key_pointer] # only the wrapper block, not the files themselves
         )

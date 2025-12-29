@@ -1,14 +1,15 @@
-from typing import Literal, Optional, Type, TypeVar, NamedTuple
 import logging
-from bitarray import bitarray
-from mmap import mmap, ACCESS_READ, ACCESS_WRITE
-from os import path
 import struct
 from enum import Enum
+from mmap import ACCESS_READ, ACCESS_WRITE, mmap
+from os import path
 from pathlib import Path
+from typing import Literal, NamedTuple, Optional, Type, TypeVar
 
-from .globals import block_size, block_size_bits
+from bitarray import bitarray
+
 from .blocks import AbstractBlock, BitmapBlock
+from .globals import block_size, block_size_bits
 
 
 class DeviceFormat(str, Enum):

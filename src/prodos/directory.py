@@ -1,14 +1,20 @@
-from typing import Optional, cast
-from dataclasses import dataclass, field
 import logging
+from dataclasses import dataclass, field
 from fnmatch import fnmatch
+from typing import Optional, cast
 
-from .globals import entries_per_block, block_size
-from .metadata import FileEntry, DirectoryEntry, StorageType, \
-    VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry, DirectoryHeaderEntry
 from .blocks import DirectoryBlock
 from .device import BlockDevice
-from .file import PlainFile, FileBase
+from .file import FileBase, PlainFile
+from .globals import block_size, entries_per_block
+from .metadata import (
+    DirectoryEntry,
+    DirectoryHeaderEntry,
+    FileEntry,
+    StorageType,
+    SubdirectoryHeaderEntry,
+    VolumeDirectoryHeaderEntry
+)
 
 
 @dataclass(kw_only=True)
@@ -137,7 +143,6 @@ class DirectoryFile(FileBase):
         # Check for no-op: same directory and same name
         same_dir = self.block_list[0] == dest_dir.block_list[0]
         if same_dir and entry.file_name == dest_name:
-            import logging
             logging.warning(f"move_simple_file: {entry.file_name} already at destination")
             return
 
@@ -198,7 +203,6 @@ class DirectoryFile(FileBase):
         # Check for no-op: same directory and same name
         same_dir = self.block_list[0] == dest_dir.block_list[0]
         if same_dir and entry.file_name == dest_name:
-            import logging
             logging.warning(f"move_directory: {entry.file_name} already at destination")
             return
 
@@ -277,8 +281,7 @@ class DirectoryFile(FileBase):
         mark = device.mark_session()
         header: Optional[DirectoryEntry] = None
         while True:
-            data = device.read_block(block_index)
-            db = DirectoryBlock.unpack(data)
+            db = device.read_typed_block(block_index, DirectoryBlock)
             if prev == 0:
                 assert db.header_entry, "Directory.read: Expected DirectoryHeaderEntry in key block"
                 header = db.header_entry

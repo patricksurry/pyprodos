@@ -1,6 +1,6 @@
 """Python implementation of Apple ProDOS 8 file system."""
 
-from importlib.metadata import version, PackageNotFoundError
+from importlib.metadata import PackageNotFoundError, version
 
 try:
     __version__ = version("pyprodos")

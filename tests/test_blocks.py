@@ -1,13 +1,21 @@
 """Tests for ProDOS block types: Directory, Index, Bitmap, and Extended blocks."""
 from pathlib import Path
+
 from bitarray import bitarray
 
-from prodos.blocks import DirectoryBlock, IndexBlock, BitmapBlock, ExtendedKeyBlock
-from prodos.metadata import (
-    ExtendedForkEntry, StorageType, FileEntry,
-    VolumeDirectoryHeaderEntry, SubdirectoryHeaderEntry
+from prodos.blocks import (
+    BitmapBlock,
+    DirectoryBlock,
+    ExtendedKeyBlock,
+    IndexBlock
 )
-
+from prodos.metadata import (
+    ExtendedForkEntry,
+    FileEntry,
+    StorageType,
+    SubdirectoryHeaderEntry,
+    VolumeDirectoryHeaderEntry
+)
 
 # ===== ExtendedKeyBlock Tests =====
 
@@ -55,10 +63,6 @@ def test_extended_key_block_real_data():
     """Test with real extended key block from GS/OS disk image."""
     # This is block 478 from GSOSv6.0.1.po (file: FOCUSDRIVER)
     test_data_path = Path(__file__).parent / "data" / "extended_key_block_478.bin"
-
-    if not test_data_path.exists():
-        import pytest
-        pytest.skip(f"Test data not found: {test_data_path}")
 
     with open(test_data_path, 'rb') as f:
         block_data = f.read()
@@ -126,10 +130,6 @@ def test_directory_block_volume_real_data():
     """Test with real volume directory block."""
     test_data_path = Path(__file__).parent / "data" / "volume_directory_block_2.bin"
 
-    if not test_data_path.exists():
-        import pytest
-        pytest.skip(f"Test data not found: {test_data_path}")
-
     with open(test_data_path, 'rb') as f:
         block_data = f.read()
 
@@ -152,10 +152,6 @@ def test_directory_block_volume_real_data():
 def test_directory_block_subdir_real_data():
     """Test with real subdirectory block."""
     test_data_path = Path(__file__).parent / "data" / "subdirectory_block_27.bin"
-
-    if not test_data_path.exists():
-        import pytest
-        pytest.skip(f"Test data not found: {test_data_path}")
 
     with open(test_data_path, 'rb') as f:
         block_data = f.read()
@@ -204,10 +200,6 @@ def test_directory_block_synthetic():
 def test_index_block_real_data():
     """Test with real index block from a sapling file."""
     test_data_path = Path(__file__).parent / "data" / "index_block_22.bin"
-
-    if not test_data_path.exists():
-        import pytest
-        pytest.skip(f"Test data not found: {test_data_path}")
 
     with open(test_data_path, 'rb') as f:
         block_data = f.read()
@@ -264,10 +256,6 @@ def test_index_block_max_pointers():
 def test_bitmap_block_real_data():
     """Test with real bitmap block."""
     test_data_path = Path(__file__).parent / "data" / "bitmap_block_6.bin"
-
-    if not test_data_path.exists():
-        import pytest
-        pytest.skip(f"Test data not found: {test_data_path}")
 
     with open(test_data_path, 'rb') as f:
         block_data = f.read()
