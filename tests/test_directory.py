@@ -7,7 +7,14 @@ import pytest
 from conftest import IMAGES, write
 from prodos.directory import Directory
 from prodos.errors import ProDOSError
-from prodos.metadata import FileType, StorageType, SubdirectoryHeader, subdirectory_reserved
+from prodos.metadata import (
+    FileType,
+    StorageType,
+    SubdirectoryHeader,
+    access_repr,
+    parse_access,
+    subdirectory_reserved,
+)
 from prodos.volume import Volume
 
 
@@ -136,3 +143,22 @@ def test_write_file_metadata_and_overwrite(volume: Volume):
 def test_illegal_name(volume: Volume):
     with pytest.raises(ProDOSError, match="Illegal"):
         volume.root.make_directory("1BAD")
+
+
+def test_set_info(volume: Volume):
+    entry = write(volume, "/GAME", b"\x60")
+    updated = volume.root.set_info(entry, file_type=FileType.BIN, aux_type=0x2000, access=parse_access("RW"))
+    assert (updated.file_type, updated.aux_type, access_repr(updated.access)) == (FileType.BIN, 0x2000, "RW----")
+    assert volume.path_entry("/GAME") == updated
+
+
+def test_set_info_directory_type(volume: Volume):
+    entry = volume.root.make_directory("SUB")
+    with pytest.raises(ProDOSError, match="directory"):
+        volume.root.set_info(entry, file_type=FileType.TXT)
+
+
+def test_parse_access():
+    assert access_repr(parse_access("rw-bnd")) == "RW-BND"
+    with pytest.raises(ProDOSError, match="Unknown access flags X"):
+        parse_access("RWX")

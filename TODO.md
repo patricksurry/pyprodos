@@ -1,8 +1,8 @@
 ## PyPI Publishing
 
-When ready to publish to production PyPI (currently on TestPyPI at v0.0.3):
+When ready to publish to production PyPI 
 
-1. **Update version in VERSION file** (e.g., to `0.1.0` or `1.0.0`)
+1. **Update version in VERSION file** (e.g., to `0.4.0` or `1.0.0`)
 
 2. **Rebuild the package:**
    ```bash
@@ -12,11 +12,10 @@ When ready to publish to production PyPI (currently on TestPyPI at v0.0.3):
 
 3. **Create git commit and tag:**
    ```bash
-   git add VERSION
-   git commit -m "Release v0.1.0"       # sync with VERSION
-   git tag -a v0.1.0 -m "Release version 0.1.0"
-   git push origin main
-   git push origin v0.1.0
+   git commit -am "Release v0.4.0"       # sync with VERSION
+   git tag -a v0.4.0 -m "Release version 0.4.0"
+   git push origin
+   git push origin v0.4.0
    ```
 
 4. **Create GitHub release from the tag**
@@ -45,16 +44,26 @@ When ready to publish to production PyPI (currently on TestPyPI at v0.0.3):
 
 ## Backlog
 
-- review #TODO/NOTE comments
-- implement check CLI command, using walk with some additional checks, like eof file size vs actual block count used
-- fix: hacked file type $ff everywhere, needed for system file boot
-- move walk into volume.py and generalize so we can map a function across the directory tree (cf. check)
-- implement chinfo CLI command
-- (maybe) support import for gsos extended file
-- (maybe) add a repl mode https://github.com/tiangolo/typer/issues/185
+Next PR (CLI):
+- move the remaining cp/mv/import destination logic from cli.py into the core
+  (one-shot CLI and shell should both be thin wrappers raising ProDOSError)
+- carry file type/aux type through host import/export with the CiderPress/AppleCommander
+  naming convention, e.g. `NAME#FF2000`
+- `prodos shell VOL`: mount a volume and run commands interactively using stdlib `cmd`,
+  with `cd`/`pwd`, relative paths, tab completion of ProDOS paths, `lcd`/`lls` and `!cmd`
+- show aux type in `ls` (currently only visible via export or the raw entry)
+- maybe drop typer-di, which only provides trivial parameter aliases
 
+Later / maybe:
+- `cat` command to view text files (high-bit ASCII, CR line endings)
+- write and import GS/OS extended files (reading and removing them works)
+- the next release changes the library API (`Volume.open`, `Directory`, `File`, `Fork`),
+  so bump the minor version
 
-# invalid file size example:
-❯ prodos ls images/ProDOS8.2mg /GAMES/A.TO.B/BILLBUDGE/BUDGE.SYSTEM
-BUDGE.SYSTEM            640 1/FF RW-BND 17-06-21T15:52 14-10-01T05:33 1 @ 1690
-
+Done:
+- `check` command (flags e.g. /GAMES/A.TO.B/BILLBUDGE/BUDGE.SYSTEM in images/ProDOS8.2mg,
+  whose eof 640 exceeds a seedling's 512 bytes)
+- file types: no more `$FF` everywhere; SYS for PRODOS and *.SYSTEM, else BIN, with `--type`/`--aux`
+- `Volume.walk()` shared by check and the block map
+- `chinfo` command
+- reviewed TODO/NOTE comments

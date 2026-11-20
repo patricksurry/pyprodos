@@ -17,7 +17,7 @@ from prodos.device import DeviceFormat, DeviceMode
 from prodos.directory import Directory
 from prodos.errors import ProDOSError
 from prodos.file import guess_file_type, legal_name
-from prodos.metadata import FileEntry
+from prodos.metadata import FileEntry, parse_access
 from prodos.volmap import format_block_map, format_legend, walk_volume
 from prodos.volume import Volume
 
@@ -360,6 +360,39 @@ def rmdir(
             raise typer.Exit(1)
 
         volume.directory_of(entry).delete(entry)
+
+
+@app.command()
+def chinfo(
+        source: Path = Depends(get_volume_path),
+        src: list[str] = Depends(get_paths),
+        file_type: Annotated[str | None, Option("--type", "-t", help="New file type in hex, e.g. 04 or FF")] = None,
+        aux_type: Annotated[str | None, Option("--aux", "-a", help="New aux type in hex, e.g. 2000")] = None,
+        access: Annotated[str | None, Option("--access",
+            help="New access flags, e.g. RWBND, from R=read W=write I=invisible B=backup N=rename D=destroy")] = None,
+        output: Path|None = Depends(get_output),
+        log: Path|None = Depends(get_log),
+    ):
+    """
+    Change the file type, aux type or access flags of file(s) at SRC
+    """
+    ftype = _hex(file_type, 'file type')
+    aux = _hex(aux_type, 'aux type')
+    if ftype is None and aux is None and access is None:
+        print("Nothing to change: use --type, --aux or --access")
+        raise typer.Exit(1)
+
+    with open_volume(source, output, mode='rw', log=log) as volume:
+        flags = parse_access(access) if access is not None else None
+        entries = volume.glob_paths(src)
+        if not entries:
+            print("No matching files found")
+            raise typer.Exit(1)
+        for e in entries:
+            if e.is_volume_dir:
+                print("Can't change info for the volume directory")
+                raise typer.Exit(1)
+            volume.directory_of(e).set_info(e, file_type=ftype, aux_type=aux, access=flags)
 
 
 @app.command('import')

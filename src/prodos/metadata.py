@@ -120,6 +120,15 @@ def access_byte(s: str = 'RWBND') -> int:
     return sum(_access_flags[c] for c in s)
 
 
+def parse_access(s: str) -> int:
+    """Access byte from flag letters like 'RWBND'; dashes are ignored so 'RW-BND' from a listing works"""
+    letters = s.upper().replace('-', '')
+    bad = set(letters) - _access_flags.keys()
+    if bad:
+        raise ProDOSError(f"Unknown access flags {''.join(sorted(bad))}, expected letters from {''.join(_access_flags)}")
+    return access_byte(''.join(dict.fromkeys(letters)))
+
+
 def access_repr(flags: int) -> str:
     s = ''
     for c, f in _access_flags.items():

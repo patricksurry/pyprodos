@@ -248,6 +248,22 @@ class Directory:
         self.write()
         return self.slots[i]
 
+    def set_info(self, entry: FileEntry, *,
+            file_type: int | None = None, aux_type: int | None = None, access: int | None = None) -> FileEntry:
+        """Change an entry's file type, aux type or access flags, like the ProDOS SET_FILE_INFO call"""
+        i = self._slot_of(entry.file_name)
+        entry = self.slots[i]
+        if entry.is_dir and file_type not in (None, FileType.DIR):
+            raise ProDOSError(f"Can't change the file type of directory {entry.file_name}")
+        self.slots[i] = replace(
+            entry,
+            file_type=entry.file_type if file_type is None else file_type,
+            aux_type=entry.aux_type if aux_type is None else aux_type,
+            access=entry.access if access is None else access,
+        )
+        self.write()
+        return self.slots[i]
+
     def delete(self, entry: FileEntry):
         """Delete a file, or an empty directory"""
         i = self._slot_of(entry.file_name)

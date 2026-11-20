@@ -6,7 +6,33 @@ This is a simple Python implementation of the Apple ProDOS :tm: filesystem based
 
 It provides a simple unix-style CLI for managing existing ProDOS images in 
 `.po` and `.2mg` files and for creating new ones.
-This provides an accessible file system for Apple // or other 8-bit hardware. 
+This provides an accessible file system for Apple // or other 8-bit hardware.
+
+Install it from PyPI:
+
+    % pip install pyprodos
+    % prodos --help
+
+Commands
+---
+
+| Command | Does |
+|---|---|
+| `create` | Create an empty `.po` or `.2mg` volume |
+| `info` | Show volume details, and with `--map` a picture of block usage |
+| `check` | Validate the volume's structure |
+| `ls` | List files and directories, optionally `--recursive` |
+| `cp`, `mv`, `rm` | Copy, move/rename and remove files on the volume |
+| `mkdir`, `rmdir` | Create and remove directories |
+| `chinfo` | Change a file's type, aux type or access flags |
+| `import`, `export` | Copy files (or the boot loader) between the host and the volume |
+
+Paths on the volume are case-insensitive, start with `/` and can use wildcards like `/SYSTEM/*.SYSTEM`.
+Commands that change a volume accept `--output copy.po` to write the result to a copy instead,
+and every command accepts `--log access.log` to record each block it reads and writes.
+
+Example: a boot disk
+---
 
 As an example, let's recreate a ProDOS boot volume.  Grab the ProDOS 2.4.3
 boot disk from https://prodos8.com/.  (There's a copy in `images/` here.)
@@ -48,14 +74,17 @@ then import the system files and bootloader and check the listing:
     ---------------------------------------------------------------------------------
     PRODOS                17128 2/FF RW-BND 25-12-28T15:20 25-12-28T15:20    34 @ 7
     BASIC.SYSTEM          10240 2/FF RW-BND 25-12-28T15:20 25-12-28T15:20    21 @ 41
-        2 files in MYVOL F RW-BND 25-12-28T15:19
+        2 files in MYVOL F RW--ND 25-12-28T15:19
 
-Finally, test the image in your favorite emulator.  I used [VirtualII](https://www.virtualii.com/) and popped my volume in the virtual Disk ][ drive.   After a ProDOS splash screen, you you see the familiar Basic prompt:
+Finally, test the image in your favorite emulator.  I used [VirtualII](https://www.virtualii.com/) and popped my volume in the virtual Disk ][ drive.   After a ProDOS splash screen, you see the familiar Basic prompt:
 
                 PRODOS BASIC 1.7
             COPYRIGHT APPLE  1983-92
 
     ]
+
+File types
+---
 
 Files imported from the host get type SYS (`$FF`) if they're named `PRODOS` or
 `*.SYSTEM`, which is what ProDOS needs to boot them, and BIN (`$06`) otherwise.
@@ -65,7 +94,12 @@ its load address:
     % prodos import boot.po --type 04 notes.txt /NOTES
     % prodos import boot.po --type 06 --aux 2000 game.bin /GAME
 
-`cp` and `mv` preserve each file's type, aux type and dates.
+`cp` and `mv` preserve each file's type, aux type and dates, and `chinfo` changes them later:
+
+    % prodos chinfo boot.po /GAME --aux 0800 --access RWBND
+
+Checking a volume
+---
 
 Use `check` to validate a volume's structure: directory back pointers, block
 counts, cross-linked blocks and the volume bit map:
@@ -90,11 +124,27 @@ using one name per concept where the spec overloads "directory", "entry" and "he
 | `volume.py` | `Volume`: loader, volume directory and bit map; path lookup and walking |
 | `check.py` | The invariants of a well-formed volume |
 
+Development
+---
+
+The project uses [uv](https://docs.astral.sh/uv/).  `uv sync` sets up `.venv` with the dev tools,
+then run the same checks as CI:
+
+    % uv run ruff check src tests
+    % uv run pyright
+    % uv run pytest
+
+The tests use the real disk images in `images/`, and every image a test leaves behind is
+checked with `check_volume`.
+
+Background
+---
+
 My original goal was to learn how the on-disk representation worked and to manage
 disk images for a 6502-based breadboard computer.
 ProDOS is simple enough that a minimal kernel
 can be very small.  For example I use a read-only
 version that's only a couple hundred lines of TaliForth.
 I also ported a version of the original 6502
-ProDOS filestyem kernel: [p8fs](https://github.com/patricksurry/p8fs).
+ProDOS filesystem kernel: [p8fs](https://github.com/patricksurry/p8fs).
 
