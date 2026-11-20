@@ -22,10 +22,12 @@ Commands
 | `info` | Show volume details, and with `--map` a picture of block usage |
 | `check` | Validate the volume's structure |
 | `ls` | List files and directories, optionally `--recursive` |
+| `cat` | Show text files |
 | `cp`, `mv`, `rm` | Copy, move/rename and remove files on the volume |
 | `mkdir`, `rmdir` | Create and remove directories |
 | `chinfo` | Change a file's type, aux type or access flags |
 | `import`, `export` | Copy files (or the boot loader) between the host and the volume |
+| `shell` | Mount a volume and work on it interactively |
 
 Paths on the volume are case-insensitive, start with `/` and can use wildcards like `/SYSTEM/*.SYSTEM`.
 Commands that change a volume accept `--output copy.po` to write the result to a copy instead,
@@ -45,14 +47,14 @@ Check what's on it:
 
     % prodos ls images/ProDOS_2_4_3.po
 
-    File name               EOF T/FT Access Created        Modified      Blocks @ Key
-    ---------------------------------------------------------------------------------
-    VIEW.README             512 1/FC RW-BND 18-02-13T09:09 18-02-13T09:09     1 @ 250
+    File name               EOF T/FT  Aux Access Created        Modified      Blocks @ Key
+    --------------------------------------------------------------------------------------
+    VIEW.README             512 1/FC 0801 RW-BND 18-02-13T09:09 18-02-13T09:09     1 @ 250
     ...
-    BASIC.SYSTEM          10240 2/FF RW-BND 23-12-30T02:43 23-12-30T02:43    21 @ 42
+    BASIC.SYSTEM          10240 2/FF 0000 RW-BND 23-12-30T02:43 23-12-30T02:43    21 @ 42
     ...
-    PRODOS                17128 2/FF RW-BND 23-12-30T02:43 23-12-30T02:43    34 @ 7
-    README                  999 2/04 RW-BND 23-12-30T02:43 23-12-30T02:43     3 @ 251
+    PRODOS                17128 2/FF 0000 RW-BND 23-12-30T02:43 23-12-30T02:43    34 @ 7
+    README                  999 2/04 0000 RW-BND 23-12-30T02:43 23-12-30T02:43     3 @ 251
         17 files in PRODOS.2.4.3 F RW--ND 23-12-29T19:07
 
 Let's extract the `PRODOS` o/s and `BASIC.SYSTEM` files, plus the bootloader.
@@ -70,10 +72,10 @@ then import the system files and bootloader and check the listing:
 
     % prodos ls boot.po
 
-    File name               EOF T/FT Access Created        Modified      Blocks @ Key
-    ---------------------------------------------------------------------------------
-    PRODOS                17128 2/FF RW-BND 25-12-28T15:20 25-12-28T15:20    34 @ 7
-    BASIC.SYSTEM          10240 2/FF RW-BND 25-12-28T15:20 25-12-28T15:20    21 @ 41
+    File name               EOF T/FT  Aux Access Created        Modified      Blocks @ Key
+    --------------------------------------------------------------------------------------
+    PRODOS                17128 2/FF 0000 RW-BND 25-12-28T15:20 25-12-28T15:20    34 @ 7
+    BASIC.SYSTEM          10240 2/FF 0000 RW-BND 25-12-28T15:20 25-12-28T15:20    21 @ 41
         2 files in MYVOL F RW--ND 25-12-28T15:19
 
 Finally, test the image in your favorite emulator.  I used [VirtualII](https://www.virtualii.com/) and popped my volume in the virtual Disk ][ drive.   After a ProDOS splash screen, you see the familiar Basic prompt:
@@ -89,14 +91,40 @@ File types
 Files imported from the host get type SYS (`$FF`) if they're named `PRODOS` or
 `*.SYSTEM`, which is what ProDOS needs to boot them, and BIN (`$06`) otherwise.
 Use `--type` and `--aux` to set them explicitly, e.g. a text file or a binary with
-its load address:
+its load address.  The type can be a name (`TXT`, `BIN`, `BAS`, `SYS`) or hex:
 
-    % prodos import boot.po --type 04 notes.txt /NOTES
+    % prodos import boot.po --type TXT notes.txt /NOTES
     % prodos import boot.po --type 06 --aux 2000 game.bin /GAME
+
+Host file names can also carry the type, using the CiderPress / AppleCommander
+convention `NAME#TTAAAA` (file type and aux type in hex).  `export --typed` writes
+names like that, and `import` always reads them, so types survive a round trip:
+
+    % prodos export --typed boot.po /GAME .         # writes GAME#062000
+    % prodos import other.po GAME#062000 /
 
 `cp` and `mv` preserve each file's type, aux type and dates, and `chinfo` changes them later:
 
     % prodos chinfo boot.po /GAME --aux 0800 --access RWBND
+
+Interactive shell
+---
+
+`prodos shell` mounts a volume for a session in the style of `sftp`, with a current
+directory, relative paths, tab completion and colored listings.  ProDOS commands
+work on the volume, `lcd`, `lls` and `!command` work on the host, and `put`/`get`
+copy files between them:
+
+    % prodos shell boot.po
+    MYVOL:/> mkdir games
+    MYVOL:/> cd games
+    MYVOL:/GAMES> put ~/apple2/*.bin
+    MYVOL:/GAMES> chinfo -a 0800 lode.bin
+    MYVOL:/GAMES> get -T * ~/backup
+    MYVOL:/GAMES> exit
+
+Type `help` for the list of commands.  Use `--read-only` to explore without risk,
+or `--output copy.po` to work on a copy.
 
 Checking a volume
 ---
@@ -121,8 +149,10 @@ using one name per concept where the spec overloads "directory", "entry" and "he
 | `metadata.py` | Directory records: `VolumeDirectoryHeader`, `SubdirectoryHeader`, `FileEntry` (and a glossary) |
 | `file.py` | `Fork`: bytes stored as a seedling, sapling or tree; `File`: an entry plus its fork(s) |
 | `directory.py` | `Directory`: a chain of blocks holding a header and fixed entry slots |
-| `volume.py` | `Volume`: loader, volume directory and bit map; path lookup and walking |
+| `volume.py` | `Volume`: loader, volume directory and bit map; paths and the operations on them |
 | `check.py` | The invariants of a well-formed volume |
+| `host.py` | Moving files between the host and a volume, and `NAME#TTAAAA` names |
+| `cli.py`, `shell.py` | The command line and the interactive shell, thin wrappers over the above |
 
 Development
 ---

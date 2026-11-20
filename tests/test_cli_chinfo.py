@@ -21,7 +21,7 @@ def test_chinfo(tmp_path: Path):
     result = runner.invoke(app, ["chinfo", str(vol), "/GAME", "--type", "FF", "--aux", "$2000", "--access", "RW"])
     assert result.exit_code == 0, result.stdout
     listing = runner.invoke(app, ["ls", str(vol), "/GAME"]).stdout
-    assert "1/FF RW----" in listing
+    assert "1/FF 2000 RW----" in listing
 
 
 def test_chinfo_needs_a_change(tmp_path: Path):

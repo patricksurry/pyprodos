@@ -44,21 +44,11 @@ When ready to publish to production PyPI
 
 ## Backlog
 
-Next PR (CLI):
-- move the remaining cp/mv/import destination logic from cli.py into the core
-  (one-shot CLI and shell should both be thin wrappers raising ProDOSError)
-- carry file type/aux type through host import/export with the CiderPress/AppleCommander
-  naming convention, e.g. `NAME#FF2000`
-- `prodos shell VOL`: mount a volume and run commands interactively using stdlib `cmd`,
-  with `cd`/`pwd`, relative paths, tab completion of ProDOS paths, `lcd`/`lls` and `!cmd`
-- show aux type in `ls` (currently only visible via export or the raw entry)
-- maybe drop typer-di, which only provides trivial parameter aliases
-
 Later / maybe:
-- `cat` command to view text files (high-bit ASCII, CR line endings)
 - write and import GS/OS extended files (reading and removing them works)
-- the next release changes the library API (`Volume.open`, `Directory`, `File`, `Fork`),
-  so bump the minor version
+- `put`/`get` of whole directory trees (`-r`)
+- persistent shell history (readline history file)
+- release 0.5.0 to PyPI
 
 Done:
 - `check` command (flags e.g. /GAMES/A.TO.B/BILLBUDGE/BUDGE.SYSTEM in images/ProDOS8.2mg,
@@ -67,3 +57,8 @@ Done:
 - `Volume.walk()` shared by check and the block map
 - `chinfo` command
 - reviewed TODO/NOTE comments
+- cp/mv/rm/mkdir/rmdir/import/export logic moved into `Volume` and `host.py`
+- `NAME#TTAAAA` host names on import and `export --typed`
+- `prodos shell` with cd, relative paths, completion, put/get, lcd/lls/!cmd
+- aux type shown in `ls`; `cat` command
+- dropped typer-di in favor of plain typer `Annotated` aliases
