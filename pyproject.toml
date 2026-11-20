@@ -75,3 +75,7 @@ ignore = [
 [tool.ruff.lint.flake8-bugbear]
 # typer declares parameters with calls in their defaults
 extend-immutable-calls = ["typer_di.Depends", "typer.Option", "typer.Argument"]
+
+[tool.uv]
+# version is read from VERSION, so rebuild the editable install when it changes
+cache-keys = [{ file = "pyproject.toml" }, { file = "VERSION" }]
