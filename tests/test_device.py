@@ -1,318 +1,108 @@
-"""Tests for BlockDevice methods including access logging."""
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Iterator
 
 import pytest
 from bitarray import bitarray
 
-from prodos.blocks import BitmapBlock, DirectoryBlock
-from prodos.device import AccessLogEntry, BlockDevice, DeviceFormat
+from conftest import IMAGES
+from prodos.blocks import BitmapBlock
+from prodos.device import BlockDevice, DeviceFormat, TwoImgHeader
+from prodos.errors import ProDOSError
 from prodos.globals import block_size
-from prodos.volume import Volume
 
 
 @pytest.fixture
-def test_device() -> Iterator[BlockDevice]:
-    """Create a test device with a basic volume structure."""
-    with TemporaryDirectory() as tmpdir:
-        img_path = Path(tmpdir) / "test.po"
-        volume = Volume.create(img_path, "TEST", total_blocks=280)
-        yield volume.device
+def device(tmp_path: Path):
+    d = BlockDevice.create(tmp_path / "blank.img", total_blocks=16)
+    yield d
+    d.close()
 
 
-@pytest.fixture
-def empty_device() -> Iterator[BlockDevice]:
-    """Create an empty device for low-level testing."""
-    with TemporaryDirectory() as tmpdir:
-        img_path = Path(tmpdir) / "empty.po"
-        device = BlockDevice.create(
-            dest=img_path,
-            total_blocks=100,
-            bit_map_pointer=6,
-            format=DeviceFormat.prodos
-        )
-        yield device
+def test_open_real_images():
+    for name, blocks in [("ProDOS_2_4_3.po", 280), ("P8_SRC.2mg", 1600)]:
+        d = BlockDevice(IMAGES / name)
+        assert d.total_blocks == blocks
+        d.close()
 
 
-def test_access_log_entry_namedtuple():
-    """Test that AccessLogEntry is a proper namedtuple with correct fields."""
-    entry = AccessLogEntry('r', 42, 'DirectoryBlock')
-
-    # Test field access
-    assert entry.access_type == 'r'
-    assert entry.block_index == 42
-    assert entry.block_type == 'DirectoryBlock'
-
-    # Test tuple unpacking still works
-    access_type, block_index, block_type_name = entry
-    assert access_type == 'r'
-    assert block_index == 42
-    assert block_type_name == 'DirectoryBlock'
-
-    # Test immutability
-    with pytest.raises(AttributeError):
-        entry.access_type = 'w'  # type: ignore
+def test_read_write_roundtrip_and_log(device: BlockDevice):
+    mark = device.mark_session()
+    data = bytes(range(256)) * 2
+    device.write_block(3, data)
+    assert device.read_block(3) == data
+    assert device.get_access_log('w', mark) == [3]
+    assert device.get_access_log('r', mark) == [3]
 
 
-def test_read_typed_block_logs_block_type(test_device: BlockDevice):
-    """Test that read_typed_block logs the block type in access log."""
-    mark = test_device.mark_session()
-
-    # Read a directory block
-    blk = test_device.read_typed_block(2, DirectoryBlock, unsafe=True)
-    assert isinstance(blk, DirectoryBlock)
-
-    # Check the access log
-    log_entries = test_device._access_log[mark:]    # pyright: ignore[reportPrivateUsage]
-    assert len(log_entries) == 1
-    assert log_entries[0].access_type == 'r'
-    assert log_entries[0].block_index == 2
-    assert log_entries[0].block_type == 'DirectoryBlock'
-
-
-def test_write_typed_block_logs_block_type(empty_device: BlockDevice):
-    """Test that write_typed_block logs the block type in access log."""
-    mark = empty_device.mark_session()
-
-    # Create and write a bitmap block
+def test_typed_blocks_are_logged_with_type(device: BlockDevice):
     bits = bitarray(block_size * 8)
-    bits[:] = 1
-    blk = BitmapBlock(free_map=bits)
-
-    empty_device.write_typed_block(10, blk)
-
-    # Check the access log
-    log_entries = empty_device._access_log[mark:]   # pyright: ignore[reportPrivateUsage]
-    assert len(log_entries) == 1
-    assert log_entries[0].access_type == 'w'
-    assert log_entries[0].block_index == 10
-    assert log_entries[0].block_type == 'BitmapBlock'
+    bits.setall(1)
+    device.write_typed_block(5, BitmapBlock(free_map=bits))
+    assert device.read_typed_block(5, BitmapBlock).free_map == bits
+    assert device.get_typed_access_log('rw') == [(5, 'BitmapBlock'), (5, 'BitmapBlock')]
 
 
-def test_write_block_without_type(empty_device: BlockDevice):
-    """Test that write_block without type logs empty string."""
-    mark = empty_device.mark_session()
-
-    # Write raw bytes
-    data = bytes(block_size)
-    empty_device.write_block(10, data)
-
-    # Check the access log
-    log_entries = empty_device._access_log[mark:]   # pyright: ignore[reportPrivateUsage]
-    assert len(log_entries) == 1
-    assert log_entries[0].access_type == 'w'
-    assert log_entries[0].block_index == 10
-    assert log_entries[0].block_type == ''
+def test_access_log_dump_and_file(device: BlockDevice, tmp_path: Path):
+    device.read_block(1)
+    device.log_access('a', 2)
+    assert device.dump_access_log() == "r1    a2   "
+    log = tmp_path / "log.txt"
+    device.write_access_log(log)
+    assert log.read_text() == "r 0001 \na 0002 \n"
 
 
-def test_write_block_with_type(empty_device: BlockDevice):
-    """Test that write_block can accept an explicit block_type parameter."""
-    mark = empty_device.mark_session()
-
-    # Write raw bytes with explicit type
-    data = bytes(block_size)
-    empty_device.write_block(10, data, block_type='CustomBlock')
-
-    # Check the access log
-    log_entries = empty_device._access_log[mark:]   # pyright: ignore[reportPrivateUsage]
-    assert len(log_entries) == 1
-    assert log_entries[0].access_type == 'w'
-    assert log_entries[0].block_index == 10
-    assert log_entries[0].block_type == 'CustomBlock'
+def test_block_out_of_range(device: BlockDevice):
+    with pytest.raises(ProDOSError, match="outside the volume"):
+        device.read_block(16)
 
 
-def test_allocate_block_logs_allocation(empty_device: BlockDevice):
-    """Test that allocate_block logs allocation to access log."""
-    mark = empty_device.mark_session()
-
-    block_idx = empty_device.allocate_block()
-
-    # Check the access log
-    log_entries = empty_device._access_log[mark:]   # pyright: ignore[reportPrivateUsage]
-    assert len(log_entries) == 1
-    assert log_entries[0].access_type == 'a'
-    assert log_entries[0].block_index == block_idx
-    assert log_entries[0].block_type == ''
+def test_read_only(tmp_path: Path):
+    BlockDevice.create(tmp_path / "ro.img", total_blocks=4).close()
+    d = BlockDevice(tmp_path / "ro.img")
+    with pytest.raises(ProDOSError, match="read-only"):
+        d.write_block(0, bytes(block_size))
+    d.close()
 
 
-def test_free_block_logs_free(empty_device: BlockDevice):
-    """Test that free_block logs free operation to access log."""
-    # First allocate a block
-    block_idx = empty_device.allocate_block()
-    mark = empty_device.mark_session()
-
-    # Now free it
-    empty_device.free_block(block_idx)
-
-    # Check the access log - should have write (zeroing) and free
-    log_entries = empty_device._access_log[mark:]   # pyright: ignore[reportPrivateUsage]
-    assert len(log_entries) >= 2
-
-    # Last entry should be the free operation
-    assert log_entries[-1].access_type == 'f'
-    assert log_entries[-1].block_index == block_idx
-    assert log_entries[-1].block_type == ''
+def test_create_refuses_existing(device: BlockDevice):
+    with pytest.raises(ProDOSError, match="exists"):
+        BlockDevice.create(device.source, total_blocks=4)
 
 
-def test_get_access_log_filters_by_type(empty_device: BlockDevice):
-    """Test that get_access_log correctly filters by access type."""
-    mark = empty_device.mark_session()
-
-    # Perform various operations
-    idx1 = empty_device.allocate_block()  # 'a'
-    empty_device.write_block(idx1, bytes(block_size))  # 'w'
-    empty_device.read_block(idx1, unsafe=True)  # 'r'
-    idx2 = empty_device.allocate_block()  # 'a'
-    empty_device.free_block(idx1)  # 'w', 'f'
-
-    # Filter by different types
-    reads = empty_device.get_access_log('r', mark)
-    writes = empty_device.get_access_log('w', mark)
-    allocations = empty_device.get_access_log('a', mark)
-    frees = empty_device.get_access_log('f', mark)
-
-    assert len(reads) == 1
-    assert reads[0] == idx1
-
-    assert len(allocations) == 2
-    assert allocations == [idx1, idx2]
-
-    assert len(frees) == 1
-    assert frees[0] == idx1
-
-    # Writes include explicit write plus write during free_block
-    assert idx1 in writes
+def test_bad_size(tmp_path: Path):
+    p = tmp_path / "odd.img"
+    p.write_bytes(bytes(1000))
+    with pytest.raises(ProDOSError, match="multiple"):
+        BlockDevice(p)
 
 
-def test_get_typed_access_log_returns_block_types(test_device: BlockDevice):
-    """Test that get_typed_access_log returns (block_index, block_type) tuples."""
-    mark = test_device.mark_session()
-
-    # Read different types of blocks
-    test_device.read_typed_block(2, DirectoryBlock, unsafe=True)
-
-    # Get typed log
-    typed_reads = test_device.get_typed_access_log('r', mark)
-
-    assert len(typed_reads) == 1
-    assert typed_reads[0] == (2, 'DirectoryBlock')
+@pytest.mark.skip_volume_check
+def test_2mg_header_is_complete(tmp_path: Path):
+    p = tmp_path / "new.2mg"
+    BlockDevice.create(p, total_blocks=280, format=DeviceFormat.twomg).close()
+    h = TwoImgHeader.unpack(p.read_bytes())
+    assert (h.blocks, h.data_offset, h.data_length) == (280, 64, 280 * block_size)
+    assert p.stat().st_size == 64 + 280 * block_size
 
 
-def test_dump_access_log_format(empty_device: BlockDevice):
-    """Test that dump_access_log produces correctly formatted output."""
-    # Perform some operations
-    idx = empty_device.allocate_block()
-    empty_device.write_typed_block(idx, BitmapBlock(free_map=empty_device.free_map[:block_size*8]))
+@pytest.mark.skip_volume_check
+def test_2mg_legacy_header_and_trailing_data(tmp_path: Path):
+    # earlier versions left blocks/offset/length zero; others append comment chunks
+    legacy = tmp_path / "legacy.2mg"
+    legacy.write_bytes(TwoImgHeader(data_offset=0).pack() + bytes(8 * block_size))
+    d = BlockDevice(legacy)
+    assert (d.offset, d.total_blocks) == (64, 8)
+    d.close()
 
-    dump = empty_device.dump_access_log()
-
-    # Check that dump contains access types and block indices
-    assert 'a' in dump  # allocate (lowercase)
-    assert 'w' in dump  # write (lowercase)
-    assert 'BitmapBlock' in dump  # block type
-
-    # Check hex formatting (block indices appear as hex)
-    # The format is like "a0    w0   :BitmapBlock"
-    assert '0' in dump  # should contain block index in hex
+    trailing = tmp_path / "trailing.2mg"
+    trailing.write_bytes(TwoImgHeader(data_length=8 * block_size).pack() + bytes(8 * block_size) + b"comment")
+    d = BlockDevice(trailing)
+    assert d.total_blocks == 8
+    d.close()
 
 
-def test_mark_session_tracks_position(empty_device: BlockDevice):
-    """Test that mark_session allows filtering access log by time."""
-    # Do some operations before mark
-    idx1 = empty_device.allocate_block()
-
-    mark = empty_device.mark_session()
-
-    # Do operations after mark
-    idx2 = empty_device.allocate_block()
-    empty_device.write_block(idx2, bytes(block_size))
-
-    # Get logs from mark
-    allocations_from_mark = empty_device.get_access_log('a', mark)
-
-    # Should only see allocations after the mark
-    assert idx2 in allocations_from_mark
-    assert idx1 not in allocations_from_mark
-
-
-def test_write_typed_block_round_trip(empty_device: BlockDevice):
-    """Test that data written with write_typed_block can be read back."""
-
-    # Create a bitmap block with specific pattern
-    bits = bitarray(block_size * 8)
-    bits[:] = 0
-    bits[0:100] = 1  # Mark first 100 bits as free
-
-    original_block = BitmapBlock(free_map=bits)
-
-    # Write it
-    empty_device.write_typed_block(20, original_block)
-
-    # Read it back
-    read_block = empty_device.read_typed_block(20, BitmapBlock, unsafe=True)
-
-    # Compare
-    assert read_block.free_map == original_block.free_map
-
-
-def test_device_create_formats(tmp_path: Path):
-    """Test creating devices in different formats."""
-    # Test ProDOS format
-    prodos_path = tmp_path / "test.po"
-    device_po = BlockDevice.create(
-        dest=prodos_path,
-        total_blocks=280,
-        bit_map_pointer=6,
-        format=DeviceFormat.prodos
-    )
-    assert prodos_path.exists()
-    assert prodos_path.stat().st_size == 280 * block_size
-    assert device_po.total_blocks == 280
-
-    # Test 2MG format
-    twomg_path = tmp_path / "test.2mg"
-    device_2mg = BlockDevice.create(
-        dest=twomg_path,
-        total_blocks=280,
-        bit_map_pointer=6,
-        format=DeviceFormat.twomg
-    )
-    assert twomg_path.exists()
-    assert twomg_path.stat().st_size == 280 * block_size + 64  # 2MG has 64-byte header
-    assert device_2mg.total_blocks == 280
-
-
-def test_free_map_operations(empty_device: BlockDevice):
-    """Test that free map is correctly maintained."""
-    initial_free = empty_device.blocks_free
-
-    # Allocate a block
-    idx = empty_device.allocate_block()
-    assert empty_device.blocks_free == initial_free - 1
-    assert not empty_device.free_map[idx]
-
-    # Free the block
-    empty_device.free_block(idx)
-    assert empty_device.blocks_free == initial_free
-    assert empty_device.free_map[idx]
-
-
-def test_write_free_map_uses_typed_blocks(empty_device: BlockDevice):
-    """Test that write_free_map uses write_typed_block for logging."""
-    # Modify free map
-    empty_device.allocate_block()
-    empty_device.allocate_block()
-
-    mark = empty_device.mark_session()
-
-    # Write the free map
-    empty_device.write_free_map()
-
-    # Check that BitmapBlock types were logged
-    typed_writes = empty_device.get_typed_access_log('w', mark)
-
-    # Should have written bitmap blocks
-    assert len(typed_writes) > 0
-    for _, block_type in typed_writes:
-        assert block_type == 'BitmapBlock'
+@pytest.mark.skip_volume_check
+def test_2mg_rejects_dos_order(tmp_path: Path):
+    p = tmp_path / "dos.2mg"
+    p.write_bytes(TwoImgHeader(image_format=0).pack() + bytes(block_size))
+    with pytest.raises(ProDOSError, match="ProDOS-order"):
+        BlockDevice(p)

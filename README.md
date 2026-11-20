@@ -57,6 +57,39 @@ Finally, test the image in your favorite emulator.  I used [VirtualII](https://w
 
     ]
 
+Files imported from the host get type SYS (`$FF`) if they're named `PRODOS` or
+`*.SYSTEM`, which is what ProDOS needs to boot them, and BIN (`$06`) otherwise.
+Use `--type` and `--aux` to set them explicitly, e.g. a text file or a binary with
+its load address:
+
+    % prodos import boot.po --type 04 notes.txt /NOTES
+    % prodos import boot.po --type 06 --aux 2000 game.bin /GAME
+
+`cp` and `mv` preserve each file's type, aux type and dates.
+
+Use `check` to validate a volume's structure: directory back pointers, block
+counts, cross-linked blocks and the volume bit map:
+
+    % prodos check boot.po
+    No problems found
+
+How the code is organized
+---
+
+The code mirrors the [technical reference](https://prodos8.com/docs/techref/file-organization/),
+using one name per concept where the spec overloads "directory", "entry" and "header":
+
+| Module | Concept |
+|---|---|
+| `device.py` | `BlockDevice`: a `.po` or `.2mg` image as numbered 512-byte blocks, with an access log |
+| `bitmap.py` | `Bitmap`: the volume bit map recording free blocks |
+| `blocks.py` | Block formats: directory, index, bit map and extended key blocks |
+| `metadata.py` | Directory records: `VolumeDirectoryHeader`, `SubdirectoryHeader`, `FileEntry` (and a glossary) |
+| `file.py` | `Fork`: bytes stored as a seedling, sapling or tree; `File`: an entry plus its fork(s) |
+| `directory.py` | `Directory`: a chain of blocks holding a header and fixed entry slots |
+| `volume.py` | `Volume`: loader, volume directory and bit map; path lookup and walking |
+| `check.py` | The invariants of a well-formed volume |
+
 My original goal was to learn how the on-disk representation worked and to manage
 disk images for a 6502-based breadboard computer.
 ProDOS is simple enough that a minimal kernel

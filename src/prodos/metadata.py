@@ -1,20 +1,33 @@
-import logging
-import struct
-from dataclasses import dataclass, field, fields
-from enum import IntEnum
-from typing import Any, ClassVar, Final, Protocol, Self
-
-from .globals import (
-    entries_per_block,
-    entry_length,
-    volume_directory_length,
-    volume_key_block
-)
-from .p8datetime import P8DateTime
-
 """
-Figure B-12. Header and Entry Fields
+On-disk directory records, mirroring the ProDOS Technical Reference, Appendix B
+(https://prodos8.com/docs/techref/file-organization/).
 
+Glossary
+--------
+The spec reuses "directory", "entry" and "header" for several different things.
+This package uses one name for each idea:
+
+    Volume           Loader blocks + volume bit map + root (volume) directory.  [volume.py]
+    Directory        A chain of blocks holding a header and a fixed array of entry
+                     slots ("directory file" in the spec).  [directory.py]
+    DirectoryHeader  The first record of a directory, where the directory describes
+                     itself: VolumeDirectoryHeader for the root (Figure B-3),
+                     SubdirectoryHeader for the others (Figure B-4).
+    FileEntry        A named slot in a directory that points at storage (Figure B-5).
+                     It describes files *and* subdirectories: the entry is how a
+                     parent names you, the header is how a directory describes itself.
+    Fork             A byte sequence stored as a seedling, sapling or tree.  [file.py]
+    File             A FileEntry plus its fork: one for a standard file, or a data
+                     fork and a resource fork for a GS/OS extended file.  [file.py]
+
+Back pointers tie these together: a FileEntry's header_pointer is the key block of
+the directory containing it, and a SubdirectoryHeader's parent_pointer and
+parent_entry_number locate the FileEntry in the parent that names the subdirectory.
+
+storage_type says *how* data is laid out (seedling, sapling, tree, directory, ...);
+file_type says *what* it is (text, binary, system, ...).
+
+Figure B-12. Header and Entry Fields
 
                                                                                  +-------- Write-Enable
                                                                                  |   +---- Read-Enable
@@ -47,23 +60,33 @@ Figure B-12. Header and Entry Fields
                                                        header pointer = block address of key block
                                                        of entry's directory
 """
+import re
+import struct
+from dataclasses import dataclass, field, fields
+from enum import IntEnum
+from typing import Any, ClassVar, Final, Protocol, Self
+
+from .errors import ProDOSError
+from .globals import block_size, entries_per_block, entry_length, volume_directory_length, volume_key_block
+from .p8datetime import P8DateTime
 
 
 class StorageType(IntEnum):
     empty = 0
-    seedling = 1
-    sapling = 2
-    tree = 3
-#    pascal = 4                 #TODO not implemented, see https://prodos8.com/docs/technote/25/
-    extended = 5
-    dir = 0xD
-    subdirhdr = 0xE
-    voldirhdr = 0xF
+    seedling = 1                # one data block
+    sapling = 2                 # index block -> up to 256 data blocks
+    tree = 3                    # master index -> up to 128 index blocks -> data blocks
+#    pascal = 4                 # Pascal area, not supported; see https://prodos8.com/docs/technote/25/
+    extended = 5                # GS/OS file with data and resource forks
+    dir = 0xD                   # file entry for a subdirectory
+    subdirhdr = 0xE             # subdirectory header
+    voldirhdr = 0xF             # volume directory header
+
 
 directory_types = {
-    StorageType.dir,            # directory file entry
-    StorageType.subdirhdr,      # subdirectory header
-    StorageType.voldirhdr,      # volume directory header
+    StorageType.dir,
+    StorageType.subdirhdr,
+    StorageType.voldirhdr,
 }
 
 simple_file_types = {
@@ -71,6 +94,15 @@ simple_file_types = {
     StorageType.sapling,
     StorageType.tree,
 }
+
+
+class FileType(IntEnum):
+    """A few common file types.  Any byte value is a valid file_type."""
+    TXT = 0x04      # ASCII text
+    BIN = 0x06      # binary, aux_type is the load address
+    DIR = 0x0F      # directory
+    BAS = 0xFC      # Applesoft BASIC program
+    SYS = 0xFF      # ProDOS system file, e.g. PRODOS or *.SYSTEM
 
 
 _access_flags: Final = dict(
@@ -95,18 +127,24 @@ def access_repr(flags: int) -> str:
     return s
 
 
+def is_legal_name(name: str) -> bool:
+    """1-15 characters: a letter followed by letters, digits or periods"""
+    return re.fullmatch(r'[A-Z][A-Z0-9.]{0,14}', name) is not None
+
+
 class IsDataclass(Protocol):
     # verify whether obj is a dataclass
     __dataclass_fields__: ClassVar[dict[str, Any]]
 
 
-def shallow_dict(d: IsDataclass):
+def shallow_dict(d: IsDataclass) -> dict[str, Any]:
     """create a shallow dict for a dataclass, since asdict() breaks nested objs"""
     return {f.name: getattr(d, f.name) for f in fields(d)}
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, frozen=True)
 class NamedEntry:
+    """The storage_type / name_length byte and file_name common to every record"""
     SIZE: ClassVar = 16
     _struct: ClassVar = "<B15s"
 
@@ -114,6 +152,8 @@ class NamedEntry:
     file_name: str
 
     def pack(self) -> bytes:
+        if len(self.file_name) > 15:
+            raise ProDOSError(f"Name {self.file_name!r} is longer than 15 characters")
         type_len = (self.storage_type << 4) | len(self.file_name)
         return struct.pack(NamedEntry._struct, type_len, self.file_name.encode('ascii'))
 
@@ -132,19 +172,12 @@ class NamedEntry:
         )
 
 
-@dataclass(kw_only=True)
-class DirectoryEntry(NamedEntry):
-    """Entry pointing to a DirectoryFile within a directory block"""
+@dataclass(kw_only=True, frozen=True)
+class DirectoryHeader(NamedEntry):
+    """Fields common to the volume directory header and subdirectory headers"""
     SIZE: ClassVar = NamedEntry.SIZE + 19
-    _struct: ClassVar = "<8s4s5BH"
+    _struct: ClassVar = "<8s4sBBBBBH"
 
-    #TODO/NOTE
-    # spec suggests there are magic bytes for VolumeDirectoryHeaderEntry
-    # namely $75 $23 $00 $c3 $27 $0d $00 where $23 is version 2.3
-    # from source of ProDOS 8 V2.0.3      06-May-93
-    #   Pass        DB     $75
-    #   XDOSver     DB     $0,0,$C3,$27,$0D,0,0,0
-    # but this doesn't seem to be the case in the wild
     reserved: bytes = bytes(8)
     created: P8DateTime = field(default_factory=P8DateTime.now)
     version: int = 0
@@ -159,15 +192,16 @@ class DirectoryEntry(NamedEntry):
         typ = f"{self.storage_type:x}".upper()
         return f"    {self.file_count:d} files in {self.file_name} {typ} {flags} {self.created}"
 
-    def __post_init___(self):
-        assert self.entry_length == entry_length, \
-            f"DirectoryHeaderEntry: entry_length {self.entry_length} != {entry_length}"
-        assert self.entries_per_block == entries_per_block, \
-            f"DirectoryHeaderEntry: entries_per_block {self.entries_per_block} != {entries_per_block}"
+    def __post_init__(self):
+        if self.entry_length != entry_length or self.entries_per_block != entries_per_block:
+            raise ProDOSError(
+                f"Directory {self.file_name} has entry_length {self.entry_length} and "
+                f"entries_per_block {self.entries_per_block}, expected {entry_length} and {entries_per_block}"
+            )
 
     def pack(self) -> bytes:
         return super().pack() + struct.pack(
-            DirectoryEntry._struct,
+            DirectoryHeader._struct,
             self.reserved,
             self.created.pack(),
             self.version,
@@ -191,7 +225,7 @@ class DirectoryEntry(NamedEntry):
             entry_length,
             entries_per_block,
             file_count
-        ) = struct.unpack(cls._struct, buf[n:])
+        ) = struct.unpack(DirectoryHeader._struct, buf[n:DirectoryHeader.SIZE])
         return cls(
             reserved=reserved,
             created=P8DateTime.unpack(dt),
@@ -205,8 +239,8 @@ class DirectoryEntry(NamedEntry):
         )
 
 
-@dataclass(kw_only=True, repr=False)
-class VolumeDirectoryHeaderEntry(DirectoryEntry):
+@dataclass(kw_only=True, frozen=True, repr=False)
+class VolumeDirectoryHeader(DirectoryHeader):
     """
     This is the first (header) entry in the volume directory,
     which describes the volume itself.
@@ -225,8 +259,8 @@ class VolumeDirectoryHeaderEntry(DirectoryEntry):
           |                            | $13
           |----------------------------|
           |                            | $14
-          /                            /        Allegedly should be magic bytes:
-  8 bytes /          reserved          /        $75 $23 $00 $c3 $27 $0d $00
+          /                            /
+  8 bytes /          reserved          /        Zero in volumes written by ProDOS 8
           |                            | $1B
           |----------------------------|
           |                            | $1C
@@ -254,29 +288,29 @@ class VolumeDirectoryHeaderEntry(DirectoryEntry):
   2 bytes |        total_blocks        | $2A
           +----------------------------+
     """
-    SIZE: ClassVar = DirectoryEntry.SIZE + 4
+    SIZE: ClassVar = DirectoryHeader.SIZE + 4
     _struct: ClassVar = "<HH"
 
-    bitmap_pointer: int        # first block of free map
-    total_blocks: int           # total blocks on device
+    bitmap_pointer: int         # first block of the volume bit map
+    total_blocks: int           # total blocks on the volume
 
     def pack(self) -> bytes:
         return super().pack() + struct.pack(
-            VolumeDirectoryHeaderEntry._struct,
+            VolumeDirectoryHeader._struct,
             self.bitmap_pointer,
             self.total_blocks,
         )
 
     @classmethod
     def unpack(cls, buf: bytes) -> Self:
-        n = DirectoryEntry.SIZE
-        d = DirectoryEntry.unpack(buf[:n])
-        assert d.storage_type == StorageType.voldirhdr, \
-            f"VolumeDirectoryHeaderEntry bad storage type {d.storage_type:x}"
+        n = DirectoryHeader.SIZE
+        d = DirectoryHeader.unpack(buf[:n])
+        if d.storage_type != StorageType.voldirhdr:
+            raise ProDOSError(f"VolumeDirectoryHeader: bad storage type {d.storage_type:x}")
         (
             bitmap_pointer,
             total_blocks
-        ) = struct.unpack(cls._struct, buf[n:])
+        ) = struct.unpack(cls._struct, buf[n:cls.SIZE])
         return cls(
             bitmap_pointer=bitmap_pointer,
             total_blocks=total_blocks,
@@ -284,8 +318,13 @@ class VolumeDirectoryHeaderEntry(DirectoryEntry):
         )
 
 
-@dataclass(kw_only=True, repr=False)
-class SubdirectoryHeaderEntry(DirectoryEntry):
+# ProDOS 8 writes $75 (followed by its version and some constants) at the start
+# of the reserved bytes in each subdirectory header; GS/OS writes $76.
+subdirectory_reserved: Final = bytes([0x75, 0x00, 0x00, 0xC3, 0x27, 0x0D, 0x00, 0x00])
+
+
+@dataclass(kw_only=True, frozen=True, repr=False)
+class SubdirectoryHeader(DirectoryHeader):
     """
     This is the first (header) entry in each sub directory,
     which describes the directory contents.
@@ -304,8 +343,8 @@ class SubdirectoryHeaderEntry(DirectoryEntry):
             |                            | $13
             |----------------------------|
             |                            | $14
-            /                            /
-    8 bytes /          reserved          /
+            /                            /          $75 then constants (ProDOS 8),
+    8 bytes /          reserved          /          or $76 then zeros (GS/OS)
             |                            | $1B
             |----------------------------|
             |                            | $1C
@@ -326,28 +365,25 @@ class SubdirectoryHeaderEntry(DirectoryEntry):
             |                            | $25
     2 bytes |         file_count         | $26
             |----------------------------|
-            |                            | $27      Block address of parent directory
-    2 bytes |       parent_pointer       | $28      (little endian)
+            |                            | $27      Block containing this directory's
+    2 bytes |       parent_pointer       | $28      entry in its parent (little endian)
             |----------------------------|
-    1 byte  |    parent_entry_number     | $29      This directory's entry in parent
-            |----------------------------|
+    1 byte  |    parent_entry_number     | $29      Number of that entry within the block,
+            |----------------------------|          counting from 1 (the key block's header is 1)
     1 byte  |    parent_entry_length     | $2A      $27
             +----------------------------+
     """
-    SIZE: ClassVar = DirectoryEntry.SIZE + 4
+    SIZE: ClassVar = DirectoryHeader.SIZE + 4
     _struct: ClassVar = "<HBB"
 
-    parent_pointer: int         # key block of parent dir
-    parent_entry_number: int    # entry index in parent
+    reserved: bytes = subdirectory_reserved
+    parent_pointer: int         # block containing our entry in the parent directory
+    parent_entry_number: int    # entry number of our entry within that block
     parent_entry_length: int = entry_length
-
-    def __post_init___(self):
-        assert self.parent_entry_length == entry_length, \
-            f"SubdirectoryHeaderEntry: unexpected parent_entry_length {self.parent_entry_length} != {entry_length}"
 
     def pack(self) -> bytes:
         return super().pack() + struct.pack(
-            SubdirectoryHeaderEntry._struct,
+            SubdirectoryHeader._struct,
             self.parent_pointer,
             self.parent_entry_number,
             self.parent_entry_length,
@@ -355,15 +391,15 @@ class SubdirectoryHeaderEntry(DirectoryEntry):
 
     @classmethod
     def unpack(cls, buf: bytes) -> Self:
-        n = DirectoryEntry.SIZE
-        d = DirectoryEntry.unpack(buf[:n])
-        assert d.storage_type == StorageType.subdirhdr, \
-            f"SubdirectoryHeaderEntry: bad storage type {d.storage_type:x}"
+        n = DirectoryHeader.SIZE
+        d = DirectoryHeader.unpack(buf[:n])
+        if d.storage_type != StorageType.subdirhdr:
+            raise ProDOSError(f"SubdirectoryHeader: bad storage type {d.storage_type:x}")
         (
             parent_pointer,
             parent_entry_number,
             parent_entry_length
-        ) = struct.unpack(cls._struct, buf[n:])
+        ) = struct.unpack(cls._struct, buf[n:cls.SIZE])
         return cls(
             parent_pointer=parent_pointer,
             parent_entry_number=parent_entry_number,
@@ -372,10 +408,7 @@ class SubdirectoryHeaderEntry(DirectoryEntry):
         )
 
 
-DirectoryHeaderEntry = VolumeDirectoryHeaderEntry | SubdirectoryHeaderEntry
-
-
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, frozen=True)
 class FileEntry(NamedEntry):
     """
     Figure B-5. The File Entry
@@ -426,6 +459,7 @@ class FileEntry(NamedEntry):
     2 bytes |       header_pointer       | $26
             +----------------------------+
 
+    Entries are immutable values: use dataclasses.replace() to derive a changed copy.
     """
     SIZE: ClassVar = NamedEntry.SIZE + 23
     _struct: ClassVar = "<BHHHB4sBBBH4sH"
@@ -436,8 +470,8 @@ class FileEntry(NamedEntry):
     heading: ClassVar = "File name               EOF T/FT Access Created        Modified      Blocks @ Key"
 
     file_type: int
-    key_pointer: int        # pointer fo file key block
-    blocks_used: int
+    key_pointer: int        # key block of the file's storage
+    blocks_used: int        # all blocks of the file, including index blocks
     eof: int
     created: P8DateTime = field(default_factory=P8DateTime.now)
     version: int = 0
@@ -446,6 +480,20 @@ class FileEntry(NamedEntry):
     aux_type: int = 0
     last_mod: P8DateTime = field(default_factory=P8DateTime.now)
     header_pointer: int     # key block of directory owning this entry
+
+    @classmethod
+    def new(cls, file_name: str, file_type: int = FileType.BIN, aux_type: int = 0) -> Self:
+        """Metadata for a new file; the storage fields are filled in when it's written"""
+        return cls(
+            storage_type=StorageType.empty,
+            file_name=file_name,
+            file_type=file_type,
+            aux_type=aux_type,
+            key_pointer=0,
+            blocks_used=0,
+            eof=0,
+            header_pointer=0,
+        )
 
     def __repr__(self):
         typ = f"{self.storage_type:1x}/{self.file_type:02x}".upper()
@@ -469,7 +517,7 @@ class FileEntry(NamedEntry):
 
     @property
     def is_active(self) -> bool:
-        return self.storage_type != 0
+        return self.storage_type != StorageType.empty
 
     def pack(self) -> bytes:
         return super().pack() + struct.pack(FileEntry._struct,
@@ -491,10 +539,6 @@ class FileEntry(NamedEntry):
     def unpack(cls, buf: bytes) -> Self:
         n = NamedEntry.SIZE
         d = NamedEntry.unpack(buf[:n])
-
-        if d.storage_type not in list(map(int, StorageType)):
-            logging.warning(f"FileEntry: unexpected storage type {d.storage_type:x}")
-
         (
             file_type,
             key_pointer,
@@ -508,7 +552,7 @@ class FileEntry(NamedEntry):
             aux_type,
             mt,
             header_pointer,
-        ) = struct.unpack(cls._struct, buf[n:])
+        ) = struct.unpack(cls._struct, buf[n:cls.SIZE])
 
         return cls(
             file_type=file_type,
@@ -526,12 +570,12 @@ class FileEntry(NamedEntry):
         )
 
 
-@dataclass(kw_only=True)
-class ExtendedForkEntry:
+@dataclass(kw_only=True, frozen=True)
+class ForkEntry:
     """
-    Mini-entry for data fork or resource fork in an extended file (storage type $5).
+    Mini-entry describing one fork of an extended file (storage type $5),
+    stored in the extended key block.  See https://prodos8.com/docs/technote/25/
 
-    Each fork has an 8-byte mini-entry in the extended key block:
     - Offset +0: storage_type (1 byte)
     - Offset +1: key_block (2 bytes)
     - Offset +3: blocks_used (2 bytes)
@@ -550,9 +594,9 @@ class ExtendedForkEntry:
 
     def pack(self) -> bytes:
         assert len(self.finder_info) == 36, \
-            f"ExtendedForkEntry.pack: finder_info should be 36 bytes, got {len(self.finder_info)}"
+            f"ForkEntry.pack: finder_info should be 36 bytes, got {len(self.finder_info)}"
         return struct.pack(
-            ExtendedForkEntry._struct,
+            ForkEntry._struct,
             self.storage_type,
             self.key_block,
             self.blocks_used,
@@ -580,24 +624,6 @@ class ExtendedForkEntry:
             finder_info=finder_info
         )
 
-    def as_file_entry(self, file_name: str = '', file_type: int = 0) -> FileEntry:
-        """Create a virtual FileEntry for use with PlainFile.from_entry"""
-        return FileEntry(
-            storage_type=self.storage_type,
-            file_name=file_name,
-            file_type=file_type,
-            key_pointer=self.key_block,
-            blocks_used=self.blocks_used,
-            eof=self.eof,
-            created=P8DateTime.now(),   #TODO propagate from parent FileEntry?
-            version=0,
-            min_version=0,
-            access=0,
-            aux_type=0,
-            last_mod=P8DateTime.now(),
-            header_pointer=0,
-        )
-
 
 # empty file entry to fill unused slots
 FileEntry.empty = FileEntry(
@@ -616,14 +642,14 @@ FileEntry.empty = FileEntry(
     header_pointer = 0,
 )
 
-# dummy record to indicate root directory
+# pseudo-entry naming the volume directory, which has no entry of its own
 FileEntry.root = FileEntry(
     storage_type = StorageType.voldirhdr,
     file_name = '/',
-    file_type = 0xff,
+    file_type = FileType.DIR,
     key_pointer = volume_key_block,
     blocks_used = volume_directory_length,
-    eof = 0,
+    eof = volume_directory_length * block_size,
     created = P8DateTime.empty,
     version = 0,
     min_version = 0,
@@ -635,6 +661,6 @@ FileEntry.root = FileEntry(
 
 # static tests
 
-assert VolumeDirectoryHeaderEntry.SIZE == entry_length
-assert SubdirectoryHeaderEntry.SIZE == entry_length
+assert VolumeDirectoryHeader.SIZE == entry_length
+assert SubdirectoryHeader.SIZE == entry_length
 assert FileEntry.SIZE == entry_length

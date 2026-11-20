@@ -11,7 +11,7 @@ runner = CliRunner()
 def cmp_vols(a: str, b: str) -> int:
     va = open(a, 'rb').read()
     vb = open(b, 'rb').read()
-    return len([(x,y) for (x,y) in zip(va, vb) if x != y]) + abs(len(va) - len(vb))
+    return len([(x,y) for (x,y) in zip(va, vb, strict=False) if x != y]) + abs(len(va) - len(vb))
 
 
 def test_roundtrip(tmp_path: Path):

@@ -1,69 +1,50 @@
-import logging
+"""Files and the forks that store their contents."""
 import re
 import string
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Self
 
+from .bitmap import Bitmap
 from .blocks import ExtendedKeyBlock, IndexBlock
 from .device import BlockDevice
-from .globals import block_size, block_size_bits
-from .metadata import FileEntry, StorageType, access_byte
+from .errors import ProDOSError
+from .globals import block_size, max_eof
+from .metadata import FileEntry, FileType, StorageType, simple_file_types
 from .p8datetime import P8DateTime
 
 
+def legal_name(name: str) -> str:
+    """Coerce a host file name to a legal ProDOS name"""
+    name = re.sub(r'[^.A-Z0-9]', '0', name.upper())
+    if name[:1] not in tuple(string.ascii_uppercase):
+        name = 'A' + name
+    return name[:15]
+
+
 def legal_path(path: str) -> str:
-    return '/'.join([
-        ('' if (part+'A')[0] in string.ascii_uppercase else 'A') +
-        re.sub(r'[^./A-Z0-9]', '0', part)
-        for part in path.upper().split('/')
-    ])
+    return '/'.join(legal_name(part) if part else '' for part in path.split('/'))
+
+
+def guess_file_type(name: str) -> FileType:
+    """ProDOS boots PRODOS and then the first *.SYSTEM file, both of type SYS"""
+    name = name.upper()
+    return FileType.SYS if name == 'PRODOS' or name.endswith('.SYSTEM') else FileType.BIN
+
+
+def capacity(storage_type: StorageType) -> int:
+    """Maximum bytes addressable by a seedling (512), sapling (128K) or tree (32M)"""
+    return block_size << (8 * (storage_type - 1))
 
 
 @dataclass(kw_only=True)
-class FileBase:
-    device: BlockDevice
-    file_name: str
-    file_type: int = 0xff       #TODO hack needed for system file boot
-    block_list: list[int] = field(default_factory=list[int])
-    version: int = 0            #TODO populate these from header
-    min_version: int = 0
-    created: P8DateTime = field(default_factory=P8DateTime.now)
-
-    @property
-    def storage_type(self) -> StorageType:
-        ...
-
-    @property
-    def file_size(self) -> int:
-        ...
-
-    def entry(self, header_pointer: int) -> FileEntry:
-        """Create the file entry metadata for this file, to appear in a DirectoryFile"""
-        return FileEntry(
-            storage_type = self.storage_type,
-            file_name = self.file_name,
-            file_type = self.file_type,
-            key_pointer = self.block_list[0],
-            blocks_used = len(self.block_list),
-            eof = self.file_size,
-            created = self.created,
-            version = self.version,
-            min_version = self.min_version,
-            access = access_byte(),
-            aux_type = 0,
-            last_mod = P8DateTime.now(),
-            header_pointer = header_pointer,
-        )
-
-    def remove(self):
-        assert self.block_list, "FileBase.remove: can't remove unmapped file"
-        while self.block_list:
-            self.device.free_block(self.block_list.pop())
-
-
-@dataclass(kw_only=True)
-class PlainFile(FileBase):
+class Fork:
     """
+    A sequence of bytes stored as a seedling, sapling or tree.
+
+    A seedling is a single data block.  A sapling's key block is an index
+    block pointing at up to 256 data blocks.  A tree's key block is a master
+    index block pointing at up to 128 index blocks.
+
     B.3.7 - Locating a Byte in a File
 
     Byte #        Byte 2             Byte 1            Byte 0
@@ -78,6 +59,7 @@ class PlainFile(FileBase):
     Figure B-9. A Sparse File
 
     Nil (0) block pointers represent blocks of zeros without allocating storage.
+    The first data block is always allocated.
 
                        0 1 2
       key_pointer --> +--------------+
@@ -94,189 +76,163 @@ class PlainFile(FileBase):
                                          |
                           Bytes $565..$568
     """
+    storage_type: StorageType
+    key_pointer: int
     data: bytes
+    index_blocks: list[int] = field(default_factory=list[int])
+    data_blocks: list[int] = field(default_factory=list[int])
 
     @property
-    def file_size(self) -> int:
+    def eof(self) -> int:
         return len(self.data)
 
     @property
-    def storage_type(self) -> StorageType:
-        n = self.file_size
-        if n <= block_size:
-            return StorageType.seedling
-        elif n <= block_size << 8:
-            return StorageType.sapling
-        else:
-            return StorageType.tree
-
-    def export(self, dst: str):
-        open(dst, 'wb').write(self.data)
-
-    def write(self) -> int:
-        """
-        write to a hierarchical file, returning storage level.
-        Sparse files are handled with blocks of zeros encoded with block index 0.
-        TODO/NOTE this implementation will write completely empty sapling and tree files with
-        no data blocks, whereas tech doc notes:
-
-            The first data block of a standard file, be it a seedling,
-            sapling, or tree file, is always allocated. Thus there is always
-            a data block to be read in when the file is opened.
-
-        This is probably a consequence of the create/set eof api.
-        """
-        if self.block_list:
-            self.remove()
-
-        level = 1
-        chunk_size = block_size
-        n = len(self.data)
-        while chunk_size < n:
-            chunk_size <<= 8
-            level += 1
-
-        self._write_simple_file(self.data, chunk_size)
-
-        return level
-
-    def _write_simple_file(self, data: bytes, chunk_size: int) -> int:
-        # allocate block before writing sub-chunks
-        index = self.device.allocate_block()
-        self.block_list.append(index)
-
-        n = len(data)
-        assert n <= chunk_size, f"_write_simple_file: size {n} exceeds chunk {chunk_size}"
-        if chunk_size == block_size:
-            # pad to full block and write raw data
-            out = data + bytes(block_size-n)
-            self.device.write_block(index, out)
-        else:
-            chunk_size >>= 8
-            ixs: list[int] = []
-            for off in range(0, n, chunk_size):
-                blk = data[off:off+chunk_size]
-                # sparse file skips write of empty blocks
-                ixs.append(
-                    self._write_simple_file(blk, chunk_size)
-                    if any(blk)
-                    else 0
-                )
-            self.device.write_typed_block(index, IndexBlock(block_pointers=ixs))
-        return index
+    def blocks(self) -> list[int]:
+        """Every block in the fork, which is what blocks_used counts"""
+        return self.index_blocks + self.data_blocks
 
     @classmethod
-    def from_entry(cls, device: BlockDevice, entry: FileEntry) -> Self:
-        assert entry.is_plain_file, f"File.from_entry: not simple file {entry}"
-        mark = device.mark_session()
-        data = cls._read_simple_file(
-            device,
-            block_index=entry.key_pointer,
-            level=entry.storage_type,
-            length=entry.eof
-        )
-        return cls(
-            device=device,
-            file_name=entry.file_name,
-            file_type=entry.file_type,
-            data=data,
-            block_list=device.get_access_log('r', mark)
-        )
+    def read(cls, device: BlockDevice, storage_type: StorageType, key_pointer: int, eof: int) -> Self:
+        if storage_type not in simple_file_types:
+            raise ProDOSError(f"Unexpected storage type {storage_type:x} for a fork")
+        # A damaged entry can claim more bytes than its storage type addresses; read what's there
+        eof = min(eof, capacity(storage_type))
+        index_blocks: list[int] = []
+        data_blocks: list[int] = []
 
-    @classmethod
-    def _read_simple_file(cls, device: BlockDevice, block_index: int, level: int, length: int) -> bytes:
-        assert level > 0, f"_read_simple_file: level {level} is not positive"
-        # Each level adds 8 bits to the addressable file length
-        level_bits = block_size_bits + ((level-1) << 3)
-        assert length <= (1 << level_bits), f"_read_simple_file: length {length} exceeds chunk {1 << level_bits}"
-        if block_index == 0:
-            logging.debug("read_simple_file: sparse block")
-            return bytes([0]*length)
-
-        if level == 1:
-            logging.debug(f"read_simple_file block {block_index} -> {length} bytes")
-            return device.read_block(block_index)[:length]
-
-        idx = device.read_typed_block(block_index, IndexBlock)
-        chunk_bits = level_bits - 8
-        chunk_size = 1 << chunk_bits
-        n = ((length-1) >> chunk_bits) + 1
-
-        logging.debug(f"read_simple_file: reading {n} chunks of size {chunk_size} for level {level}")
-        return b''.join(
-            cls._read_simple_file(
-                device,
-                block_index=idx.block_pointers[j],
-                level=level-1,
-                length=min(length - j*chunk_size, chunk_size)
+        def read_level(level: int, block_index: int, length: int) -> bytes:
+            if block_index == 0:
+                return bytes(length)        # sparse
+            if level == StorageType.seedling:
+                data_blocks.append(block_index)
+                return device.read_block(block_index)[:length]
+            index_blocks.append(block_index)
+            pointers = device.read_typed_block(block_index, IndexBlock).block_pointers
+            chunk = capacity(StorageType(level - 1))
+            return b''.join(
+                read_level(level - 1, pointers[j], min(chunk, length - j * chunk))
+                for j in range((length + chunk - 1) // chunk)
             )
-            for j in range(0, n)
-        )
+
+        data = read_level(storage_type, key_pointer, eof)
+        return cls(storage_type=storage_type, key_pointer=key_pointer, data=data,
+                   index_blocks=index_blocks, data_blocks=data_blocks)
+
+    @classmethod
+    def write(cls, device: BlockDevice, bitmap: Bitmap, data: bytes) -> Self:
+        """Store data using the smallest storage type that fits, skipping zero blocks"""
+        if len(data) > max_eof:
+            raise ProDOSError(f"File size {len(data)} exceeds ProDOS maximum {max_eof}")
+        storage_type = StorageType.seedling
+        while capacity(storage_type) < len(data):
+            storage_type = StorageType(storage_type + 1)
+        index_blocks: list[int] = []
+        data_blocks: list[int] = []
+
+        def write_level(level: int, chunk: bytes, first: bool) -> int:
+            if not first and not any(chunk):
+                return 0                    # sparse
+            block_index = bitmap.allocate()
+            if level == StorageType.seedling:
+                data_blocks.append(block_index)
+                device.write_block(block_index, chunk.ljust(block_size, b'\0'))
+            else:
+                index_blocks.append(block_index)
+                size = capacity(StorageType(level - 1))
+                pointers = [
+                    write_level(level - 1, chunk[off:off + size], first and off == 0)
+                    for off in range(0, len(chunk), size)
+                ]
+                device.write_typed_block(block_index, IndexBlock(block_pointers=pointers))
+            return block_index
+
+        key_pointer = write_level(storage_type, data, True)
+        return cls(storage_type=storage_type, key_pointer=key_pointer, data=data,
+                   index_blocks=index_blocks, data_blocks=data_blocks)
 
 
 @dataclass(kw_only=True)
-class ExtendedFile(FileBase):
+class File:
     """
-    Extended file (storage type $5) with separate data and resource forks.
-    See https://prodos8.com/docs/technote/25/
+    A file is its directory entry plus the fork(s) holding its contents.
 
-    The key_pointer points to an ExtendedKeyBlock containing fork information.
-    Each fork (data and resource) is stored as a separate simple file structure.
+    A standard file (seedling, sapling or tree) has one fork, described by the
+    entry itself.  An extended file (storage type 5, written by GS/OS) has an
+    extended key block with a mini-entry for each of a data fork and a resource
+    fork, see https://prodos8.com/docs/technote/25/
     """
-    ext_block: ExtendedKeyBlock
-    data_fork: PlainFile
-    resource_fork: PlainFile
+    entry: FileEntry
+    data_fork: Fork
+    resource_fork: Fork | None = None
+    extended_key: ExtendedKeyBlock | None = None
 
     @property
-    def storage_type(self) -> StorageType:
-        return StorageType.extended
+    def data(self) -> bytes:
+        return self.data_fork.data
 
     @property
-    def file_size(self) -> int:
-        """ProDOS only counts the extended key block, not the individual file sizes"""
-        return block_size
+    def index_blocks(self) -> list[int]:
+        """Index blocks of every fork, plus the extended key block if any"""
+        blocks = [self.entry.key_pointer] if self.extended_key else []
+        for fork in self.forks:
+            blocks += fork.index_blocks
+        return blocks
 
-    def export(self, dst: str):
-        open(dst + '.data', 'wb').write(self.data_fork.data)
-        open(dst + '.rsrc', 'wb').write(self.resource_fork.data)
-        open(dst + '.meta', 'wb').write(self.ext_block.pack())
+    @property
+    def data_blocks(self) -> list[int]:
+        return [b for fork in self.forks for b in fork.data_blocks]
 
-#TODO Not implemented yet
-#    def write(self) -> int:
-#        ...
+    @property
+    def blocks(self) -> list[int]:
+        return self.index_blocks + self.data_blocks
+
+    @property
+    def forks(self) -> list[Fork]:
+        return [self.data_fork] + ([self.resource_fork] if self.resource_fork else [])
 
     @classmethod
-    def from_entry(cls, device: BlockDevice, entry: FileEntry) -> Self:
-        """Read an extended file from a directory entry"""
-        assert entry.storage_type == StorageType.extended, \
-            f"ExtendedFile.from_entry: not extended file {entry}"
-
-        # Read the extended key block
-        ext_block = device.read_typed_block(entry.key_pointer, ExtendedKeyBlock)
-
-        # Use the adapter to create virtual FileEntry objects and read each fork
-        data_fork = PlainFile.from_entry(
-            device,
-            ext_block.data_fork.as_file_entry(
-                file_name=f"{entry.file_name}.data",
-                file_type=entry.file_type
+    def read(cls, device: BlockDevice, entry: FileEntry) -> Self:
+        if entry.is_plain_file:
+            fork = Fork.read(device, entry.storage_type, entry.key_pointer, entry.eof)
+            return cls(entry=entry, data_fork=fork)
+        if entry.storage_type == StorageType.extended:
+            ext = device.read_typed_block(entry.key_pointer, ExtendedKeyBlock)
+            data_fork, resource_fork = (
+                Fork.read(device, f.storage_type, f.key_block, f.eof)
+                for f in (ext.data_fork, ext.resource_fork)
             )
-        )
+            return cls(entry=entry, data_fork=data_fork, resource_fork=resource_fork, extended_key=ext)
+        raise ProDOSError(f"{entry.file_name} is not a file (storage type {entry.storage_type:x})")
 
-        resource_fork = PlainFile.from_entry(
-            device,
-            ext_block.resource_fork.as_file_entry(
-                file_name=f"{entry.file_name}.rsrc",
-                file_type=entry.file_type
-            )
+    @classmethod
+    def write(cls, device: BlockDevice, bitmap: Bitmap, entry: FileEntry, data: bytes) -> Self:
+        """Write a standard file, filling in the entry's storage fields"""
+        fork = Fork.write(device, bitmap, data)
+        entry = replace(
+            entry,
+            storage_type=fork.storage_type,
+            key_pointer=fork.key_pointer,
+            blocks_used=len(fork.blocks),
+            eof=fork.eof,
+            last_mod=P8DateTime.now(),
         )
+        return cls(entry=entry, data_fork=fork)
 
-        return cls(
-            device=device,
-            file_name=entry.file_name,
-            file_type=entry.file_type,
-            ext_block=ext_block,
-            data_fork=data_fork,
-            resource_fork=resource_fork,
-            block_list=[entry.key_pointer] # only the wrapper block, not the files themselves
-        )
+    def free(self, bitmap: Bitmap):
+        for block_index in self.blocks:
+            bitmap.free(block_index)
+
+    def export(self, dst: str):
+        """Write to a host file; an extended file becomes dst.data, dst.rsrc and dst.meta"""
+        if not self.extended_key:
+            with open(dst, 'wb') as f:
+                f.write(self.data)
+            return
+        assert self.resource_fork
+        for suffix, content in (
+            ('.data', self.data),
+            ('.rsrc', self.resource_fork.data),
+            ('.meta', self.extended_key.pack()),
+        ):
+            with open(dst + suffix, 'wb') as f:
+                f.write(content)

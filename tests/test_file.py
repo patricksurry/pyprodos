@@ -1,108 +1,98 @@
-from pathlib import Path
-
 import pytest
 
-from prodos.file import ExtendedFile, PlainFile, legal_path
+from conftest import IMAGES
+from prodos.errors import ProDOSError
+from prodos.file import File, Fork, capacity, guess_file_type, legal_name, legal_path
 from prodos.globals import block_size
-from prodos.metadata import StorageType
+from prodos.metadata import FileEntry, FileType, StorageType
 from prodos.volume import Volume
 
 
 @pytest.mark.parametrize('path,expected', [
     ('abc', 'ABC'),
     ('DEF', 'DEF'),
-    ('0123_.f/7ab-,z', 'A01230.F/A7AB00Z')
+    ('0123_.f/7ab-,z', 'A01230.F/A7AB00Z'),
+    ('/sys/x', '/SYS/X'),
 ])
 def test_legal_path(path: str, expected: str):
     assert legal_path(path) == expected
 
 
-def test_extended_file_gshk():
-    """Test reading GSHK extended file (storage type 5) from GS/OS disk image."""
-    # Path to the GS/OS disk image
-    gsos_image = Path(__file__).parent.parent / "images" / "GSOSv6.0.1.po"
-
-    # Open the volume
-    volume = Volume.from_file(gsos_image)
-
-    # Read the root directory
-    root = volume.root
-
-    # Find the GSHK file entry
-    gshk_entry = None
-    for entry in root.entries:
-        if entry.file_name == "GSHK":
-            gshk_entry = entry
-            break
-
-    assert gshk_entry is not None, "GSHK file not found in root directory"
-    assert gshk_entry.storage_type == StorageType.extended, \
-        f"GSHK should be extended file, got {gshk_entry.storage_type}"
-
-    # Read the extended file
-    gshk_file = ExtendedFile.from_entry(volume.device, gshk_entry)
-
-    # Verify basic properties
-    assert gshk_file.file_name == "GSHK"
-    assert gshk_file.storage_type == StorageType.extended
-
-    # Verify both forks exist and have data
-    assert gshk_file.data_fork is not None
-    assert gshk_file.resource_fork is not None
-
-    # Verify the forks have reasonable sizes
-    assert gshk_file.data_fork.file_size > 0, "Data fork should have content"
-    assert gshk_file.resource_fork.file_size > 0, "Resource fork should have content"
-
-    # Verify total file size is sum of both forks
-    assert gshk_file.file_size == block_size
-
-    # Verify block list
-    assert len(gshk_file.block_list) == 1, "Only includes key block"
-    assert gshk_file.block_list[0] == gshk_entry.key_pointer, \
-        "First block should be extended key block"
-
-    # Verify the forks are PlainFile instances with correct names
-    assert gshk_file.data_fork.file_name == "GSHK.data"
-    assert gshk_file.resource_fork.file_name == "GSHK.rsrc"
+def test_legal_name_truncates():
+    assert legal_name('a_very_long_file_name.txt') == 'A0VERY0LONG0FIL'
 
 
-def test_plain_file_prodos():
-    """Test reading PRODOS simple file (sapling) from GS/OS disk image."""
-    # Path to the GS/OS disk image
-    gsos_image = Path(__file__).parent.parent / "images" / "GSOSv6.0.1.po"
+def test_guess_file_type():
+    assert guess_file_type('PRODOS') == FileType.SYS
+    assert guess_file_type('basic.system') == FileType.SYS
+    assert guess_file_type('README') == FileType.BIN
 
-    # Open the volume
-    volume = Volume.from_file(gsos_image)
 
-    # Read the root directory
-    root = volume.root
+def test_capacity():
+    assert capacity(StorageType.seedling) == 512
+    assert capacity(StorageType.sapling) == 512 * 256
+    assert capacity(StorageType.tree) == 512 * 256 * 256
 
-    # Find the PRODOS file entry
-    prodos_entry = None
-    for entry in root.entries:
-        if entry.file_name == "PRODOS":
-            prodos_entry = entry
-            break
 
-    assert prodos_entry is not None, "PRODOS file not found in root directory"
-    assert prodos_entry.is_plain_file, f"PRODOS should be plain file, got {prodos_entry.storage_type}"
+@pytest.mark.parametrize('size,storage_type,index,data', [
+    (0, StorageType.seedling, 0, 1),        # an empty file still has its first data block
+    (1, StorageType.seedling, 0, 1),
+    (512, StorageType.seedling, 0, 1),
+    (513, StorageType.sapling, 1, 2),
+    (512 * 256, StorageType.sapling, 1, 256),
+    (512 * 256 + 1, StorageType.tree, 3, 257),
+])
+def test_fork_roundtrip(volume: Volume, size: int, storage_type: StorageType, index: int, data: int):
+    content = bytes((i * 7 + 1) % 255 + 1 for i in range(size))   # no zero blocks
+    fork = Fork.write(volume.device, volume.bitmap, content)
+    assert fork.storage_type == storage_type
+    assert (len(fork.index_blocks), len(fork.data_blocks)) == (index, data)
+    again = Fork.read(volume.device, fork.storage_type, fork.key_pointer, fork.eof)
+    assert again.data == content
+    assert again.blocks == fork.blocks
+    # free the blocks, which aren't referenced by any directory entry
+    File(entry=FileEntry.new('X'), data_fork=fork).free(volume.bitmap)
 
-    # Read the file
-    prodos_file = PlainFile.from_entry(volume.device, prodos_entry)
 
-    # Verify basic properties
-    assert prodos_file.file_name == "PRODOS"
-    assert prodos_file.storage_type in (StorageType.seedling, StorageType.sapling, StorageType.tree)
+def test_sparse_fork(volume: Volume):
+    content = b'A' + bytes(10 * block_size) + b'Z'
+    fork = Fork.write(volume.device, volume.bitmap, content)
+    # index block, first data block (always allocated) and the last data block
+    assert (len(fork.index_blocks), len(fork.data_blocks)) == (1, 2)
+    assert Fork.read(volume.device, fork.storage_type, fork.key_pointer, fork.eof).data == content
+    for b in fork.blocks:
+        volume.bitmap.free(b)
 
-    # Verify file size matches directory entry
-    assert prodos_file.file_size == prodos_entry.eof
-    assert prodos_file.file_size == 1668  # Known size from directory listing
 
-    # Verify block count matches
-    assert len(prodos_file.block_list) == prodos_entry.blocks_used
-    assert len(prodos_file.block_list) == 5  # Known from directory listing
+def test_all_zero_fork_keeps_first_block(volume: Volume):
+    fork = Fork.write(volume.device, volume.bitmap, bytes(4 * block_size))
+    assert (len(fork.index_blocks), len(fork.data_blocks)) == (1, 1)
+    for b in fork.blocks:
+        volume.bitmap.free(b)
 
-    # Verify file has data
-    assert len(prodos_file.data) == prodos_file.file_size
-    assert prodos_file.data[:2] == b'L\xfc'  # ProDOS system file starts with JMP instruction (4C FC)
+
+def test_fork_too_big(volume: Volume):
+    with pytest.raises(ProDOSError, match="exceeds"):
+        Fork.write(volume.device, volume.bitmap, bytes(0x1000000))
+
+
+def test_extended_file():
+    with Volume.open(IMAGES / "GSOSv6.0.1.po") as volume:
+        entry = volume.root.find("GSHK")
+        assert entry and entry.storage_type == StorageType.extended
+        f = volume.read_file(entry)
+        assert f.extended_key and f.resource_fork
+        assert len(f.data) > 0 and len(f.resource_fork.data) > 0
+        # blocks_used counts the extended key block plus both forks
+        assert f.blocks[0] == entry.key_pointer
+        assert len(f.blocks) == entry.blocks_used
+
+
+def test_plain_file():
+    with Volume.open(IMAGES / "GSOSv6.0.1.po") as volume:
+        entry = volume.root.find("PRODOS")
+        assert entry and entry.is_plain_file
+        f = volume.read_file(entry)
+        assert len(f.data) == entry.eof
+        assert len(f.blocks) == entry.blocks_used
+        assert f.resource_fork is None

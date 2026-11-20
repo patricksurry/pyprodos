@@ -3,25 +3,14 @@ from pathlib import Path
 
 from bitarray import bitarray
 
-from prodos.blocks import (
-    BitmapBlock,
-    DirectoryBlock,
-    ExtendedKeyBlock,
-    IndexBlock
-)
-from prodos.metadata import (
-    ExtendedForkEntry,
-    FileEntry,
-    StorageType,
-    SubdirectoryHeaderEntry,
-    VolumeDirectoryHeaderEntry
-)
+from prodos.blocks import BitmapBlock, DirectoryBlock, ExtendedKeyBlock, IndexBlock
+from prodos.metadata import FileEntry, ForkEntry, StorageType, SubdirectoryHeader, VolumeDirectoryHeader
 
 # ===== ExtendedKeyBlock Tests =====
 
 def test_extended_key_block_round_trip():
     """Test pack/unpack round-trip with synthetic data."""
-    data_fork = ExtendedForkEntry(
+    data_fork = ForkEntry(
         storage_type=StorageType.sapling,
         key_block=100,
         blocks_used=10,
@@ -29,7 +18,7 @@ def test_extended_key_block_round_trip():
         finder_info=b'\x00' * 36
     )
 
-    resource_fork = ExtendedForkEntry(
+    resource_fork = ForkEntry(
         storage_type=StorageType.seedling,
         key_block=200,
         blocks_used=1,
@@ -92,7 +81,7 @@ def test_extended_fork_entry_eof_encoding():
     """Test that 3-byte EOF is correctly encoded/decoded."""
     # Test maximum EOF value (24-bit)
     max_eof = 0xFFFFFF
-    entry = ExtendedForkEntry(
+    entry = ForkEntry(
         storage_type=StorageType.tree,
         key_block=500,
         blocks_used=256,
@@ -101,7 +90,7 @@ def test_extended_fork_entry_eof_encoding():
     )
 
     packed = entry.pack()
-    unpacked = ExtendedForkEntry.unpack(packed)
+    unpacked = ForkEntry.unpack(packed)
 
     assert unpacked.eof == max_eof, "Maximum EOF should round-trip correctly"
 
@@ -110,7 +99,7 @@ def test_extended_fork_entry_finder_info():
     """Test that finder info is preserved correctly."""
     finder_data = b'FOCUSBB \x00\x01\x00\x00\x00\x00\x00\x00' + b'\x00' * 20
 
-    entry = ExtendedForkEntry(
+    entry = ForkEntry(
         storage_type=StorageType.seedling,
         key_block=123,
         blocks_used=1,
@@ -119,7 +108,7 @@ def test_extended_fork_entry_finder_info():
     )
 
     packed = entry.pack()
-    unpacked = ExtendedForkEntry.unpack(packed)
+    unpacked = ForkEntry.unpack(packed)
 
     assert unpacked.finder_info == finder_data, "Finder info should be preserved"
 
@@ -140,7 +129,7 @@ def test_directory_block_volume_real_data():
 
     # Should have a volume directory header
     assert dir_block.header_entry is not None
-    assert isinstance(dir_block.header_entry, VolumeDirectoryHeaderEntry)
+    assert isinstance(dir_block.header_entry, VolumeDirectoryHeader)
     assert dir_block.header_entry.file_name == "MDVOL2"
     assert dir_block.header_entry.storage_type == StorageType.voldirhdr
 
@@ -163,7 +152,7 @@ def test_directory_block_subdir_real_data():
 
     # Should have a subdirectory header
     assert dir_block.header_entry is not None
-    assert isinstance(dir_block.header_entry, SubdirectoryHeaderEntry)
+    assert isinstance(dir_block.header_entry, SubdirectoryHeader)
     assert dir_block.header_entry.file_name == "ICONS"
     assert dir_block.header_entry.storage_type == StorageType.subdirhdr
     assert dir_block.header_entry.file_count == 2

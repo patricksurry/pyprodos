@@ -10,9 +10,9 @@ from bitarray import bitarray
 from rich.console import Console
 from rich.text import Text
 
+from .errors import ProDOSError
 from .globals import block_size
-from .metadata import FileEntry, StorageType, VolumeDirectoryHeaderEntry
-from .volume import Volume
+from .volume import Volume, loader_blocks
 
 
 class BlockUsage(Enum):
@@ -24,32 +24,6 @@ class BlockUsage(Enum):
     INDEX = auto()   # File index blocks (sapling/tree)
     FILE = auto()    # File data blocks
     FREE = auto()    # Free blocks
-
-    @staticmethod
-    def from_block_type(block_type: str, is_voldir: bool = False) -> 'BlockUsage':
-        """
-        Determine usage type from block type string.
-
-        Args:
-            block_type: Block type string from typed access log (may be empty for untyped reads)
-            is_voldir: True if processing volume directory blocks (for DirectoryBlock types only)
-
-        Returns:
-            Appropriate BlockUsage enum value
-        """
-        match block_type:
-            case 'DirectoryBlock':
-                return BlockUsage.VOLDIR if is_voldir else BlockUsage.SUBDIR
-            case 'ExtendedKeyBlock' | 'IndexBlock':
-                return BlockUsage.INDEX
-            case 'LoaderBlock':
-                return BlockUsage.LOADER
-            case 'BitmapBlock':
-                return BlockUsage.BITMAP
-            case '':
-                return BlockUsage.FILE
-            case _:
-                raise ValueError(f"BlockUsage: Unknown block type '{block_type}'")
 
 
 class BlockDisplay(NamedTuple):
@@ -100,102 +74,38 @@ def walk_volume(volume: Volume) -> BlockMap:
 
     Returns a BlockMap with usage information for each block.
     """
-    device = volume.device
-    total_blocks = device.total_blocks
+    total_blocks = volume.header.total_blocks
     usage = [BlockUsage.FREE] * total_blocks
 
-    # Helper to mark blocks with usage type and handle conflicts
-    def mark_blocks(usage: list[BlockUsage], accessed: list[tuple[int, str]], cwd: str = '/', is_voldir: bool = False):
-        """
-        Mark blocks with usage type and log warnings for conflicts.
-
-        Args:
-            blocks_with_types: List of (block_idx, block_type) tuples from typed access log
-            cwd: Current path for logging
-            is_voldir: True if marking volume directory blocks
-        """
-        for block_idx, block_type in accessed:
-            new_usage = BlockUsage.from_block_type(block_type, is_voldir)
-
-            if usage[block_idx] != BlockUsage.FREE:
-                logging.warning(
-                    f"Block {block_idx} already marked as {usage[block_idx].name}, "
-                    f"but '{cwd}' is also using it as {new_usage.name}"
-                )
-            usage[block_idx] = new_usage
-
-    # Walk all files and directories recursively, tracking block access
-    def walk_directory(dir_entry: FileEntry, cwd: str = "/"):
-        """Recursively walk a directory and mark all blocks it accesses."""
-        # Mark session before reading to track which blocks are accessed
-        mark = device.mark_session()
-        dir_file = volume.read_directory(dir_entry)
-
-        # Get all blocks read during directory read (these are directory blocks)
-        dir_blocks = device.get_typed_access_log('r', mark)
-        mark_blocks(usage, dir_blocks, cwd, is_voldir=dir_entry.is_volume_dir)
-
-        # Process each entry in the directory
-        for entry in dir_file.entries:
-            if not entry.is_active:
+    def mark(blocks: list[int], kind: BlockUsage, path: str):
+        for b in blocks:
+            if not 0 <= b < total_blocks:
+                logging.warning(f"'{path}' uses block {b} outside the volume")
                 continue
+            if usage[b] != BlockUsage.FREE:
+                logging.warning(
+                    f"Block {b} already marked as {usage[b].name}, "
+                    f"but '{path}' is also using it as {kind.name}"
+                )
+            usage[b] = kind
 
-            # Build path for this entry
-            entry_path = f"{cwd}{entry.file_name}/" if entry.is_dir else f"{cwd}{entry.file_name}"
+    mark(loader_blocks, BlockUsage.LOADER, 'loader')
+    mark(volume.bitmap.blocks, BlockUsage.BITMAP, 'bitmap')
 
-            if entry.is_dir:
-                # Recursively walk subdirectories
-                walk_directory(entry, entry_path)
-            elif entry.is_plain_file:
-                # Mark plain file blocks
-                walk_file(entry, entry_path)
-            elif entry.storage_type == StorageType.extended:
-                # Mark extended file blocks
-                walk_extended_file(entry, entry_path)
+    for path, d in volume.walk():
+        mark(d.blocks, BlockUsage.VOLDIR if d.is_volume_directory else BlockUsage.SUBDIR, path)
+        for e in d.entries:
+            if e.is_dir:
+                continue
+            try:
+                f = volume.read_file(e)
+            except ProDOSError as ex:
+                logging.warning(f"Error reading file '{path}{e.file_name}': {ex}")
+                continue
+            mark(f.index_blocks, BlockUsage.INDEX, path + e.file_name)
+            mark(f.data_blocks, BlockUsage.FILE, path + e.file_name)
 
-    def walk_file(entry: FileEntry, cwd: str):
-        """Walk a file and mark all its blocks by reading it."""
-        # Mark session before reading to track which blocks are accessed
-        mark = device.mark_session()
-        try:
-            volume.read_simple_file(entry)
-        except (AssertionError, Exception) as e:
-            logging.warning(f"Error reading file '{cwd}': {e}")
-            return
-
-        # Get all blocks read during file read with their types
-        blocks_with_types = device.get_typed_access_log('r', mark)
-        mark_blocks(usage, blocks_with_types, cwd)
-
-    def walk_extended_file(entry: FileEntry, cwd: str):
-        """Walk an extended file (storage type 5) and mark all its blocks."""
-        # Mark session before reading to track which blocks are accessed
-        mark = device.mark_session()
-        try:
-            volume.read_extended_file(entry)
-        except (AssertionError, Exception) as e:
-            logging.warning(f"Error reading extended file '{cwd}': {e}")
-            return
-
-        # Get all blocks read during file read with their types
-        blocks_with_types = device.get_typed_access_log('r', mark)
-        mark_blocks(usage, blocks_with_types, cwd)
-
-    # Get header for bitmap info
-    h = volume.root.header
-    assert isinstance(h, VolumeDirectoryHeaderEntry)
-
-    # Mark loader blocks (0-1)
-    mark_blocks(
-        usage,
-        [(i, 'LoaderBlock') for i in range(2)]
-        + [(i + h.bitmap_pointer, 'BitmapBlock') for i in range(device.bitmap_blocks)]
-    )
-
-    # Start walking from root
-    walk_directory(FileEntry.root)
-
-    return BlockMap(usage=usage, free_map=device.free_map)
+    return BlockMap(usage=usage, free_map=volume.bitmap.free_map)
 
 
 def format_block_map(block_map: BlockMap, width: int = 64) -> str:
