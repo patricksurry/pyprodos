@@ -93,6 +93,21 @@ def test_put_get(sh: Session, tmp_path: Path):
     assert sorted(p.name for p in got.iterdir()) == ['A.TXT#040000', 'B#FF2000']
 
 
+def test_put_get_recursive_and_loader(sh: Session, tmp_path: Path):
+    tree = tmp_path / 'tree'
+    (tree / 'sub').mkdir(parents=True)
+    (tree / 'sub' / 'x').write_bytes(b'x')
+    (tmp_path / 'loader.bin').write_bytes(b'\x01' * 10)
+    sh(f'put -r -l {tmp_path}/loader.bin {tree}')
+    assert 'X' in sh('ls tree/sub')
+    out = tmp_path / 'out'
+    out.mkdir()
+    sh(f'get -r -l {out}/loader.bin tree {out}')
+    assert (out / 'TREE' / 'SUB' / 'X').read_bytes() == b'x'
+    assert (out / 'loader.bin').read_bytes()[:11] == b'\x01' * 10 + b'\0'
+    assert 'Usage' in sh('get')
+
+
 def test_completion(sh: Session):
     assert sh.shell.complete_prodos('h') == ['HELLO']
     assert sh.shell.complete_prodos('/s') == ['/SUB/']

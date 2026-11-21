@@ -84,3 +84,33 @@ def test_import_errors(volume: Volume, tmp_path: Path):
         import_files(volume, [tmp_path], '/')
     with pytest.raises(ProDOSError, match="not a directory"):
         import_files(volume, [host, host], '/A')
+
+
+def test_recursive_roundtrip(volume: Volume, tmp_path: Path):
+    """A host tree imports as ProDOS directories and exports back the same"""
+    src = tmp_path / 'mygame'
+    (src / 'levels').mkdir(parents=True)
+    (src / 'GAME#062000').write_bytes(b'\x60')
+    (src / 'levels' / 'one.dat').write_bytes(b'1' * 1000)
+    (src / '.DS_Store').write_bytes(b'junk')
+
+    with pytest.raises(ProDOSError, match="recursively"):
+        import_files(volume, [src], '/')
+    names = [e.file_name for e in import_files(volume, [src], '/', recursive=True)]
+    assert names == ['MYGAME', 'GAME', 'LEVELS', 'ONE.DAT']
+    game = volume.path_entry('/MYGAME/GAME')
+    assert game and game.aux_type == 0x2000
+
+    # importing again merges into the existing directory
+    import_files(volume, [src], '/', recursive=True, overwrite=True)
+
+    out = tmp_path / 'out'
+    out.mkdir()
+    assert export_files(volume, ['/MYGAME'], out) == ["Omitting directory MYGAME"]
+    assert export_files(volume, ['/MYGAME'], out, typed=True, recursive=True) == []
+    assert sorted(str(p.relative_to(out)) for p in out.rglob('*')) == [
+        'MYGAME', 'MYGAME/GAME#062000', 'MYGAME/LEVELS', 'MYGAME/LEVELS/ONE.DAT#060000']
+
+    # the volume directory exports under the volume's name
+    export_files(volume, ['/'], out, recursive=True)
+    assert (out / 'TEST' / 'MYGAME' / 'LEVELS' / 'ONE.DAT').read_bytes() == b'1' * 1000

@@ -247,6 +247,7 @@ def host_import(
         file_type: FileTypeOpt = None,
         aux_type: AuxTypeOpt = None,
         force: ForceOpt = False,
+        recursive: Annotated[bool, Option("--recursive", "-r", help="Import directories too")] = False,
         log: LogOpt = None,
     ):
     """
@@ -255,7 +256,7 @@ def host_import(
     Import single host file to target file, or one or more files to target directory.
     Host names like NAME#FF2000 set the file type and aux type (here SYS at $2000);
     otherwise the type defaults to SYS for PRODOS and *.SYSTEM and BIN for anything else.
-    Directories are not imported: use host globbing to expand as file lists.
+    Use --recursive to import directories as ProDOS directories.
     Use --loader to import a boot loader to the volume.
     """
     with open_volume(source, output, mode='rw', log=log) as volume:
@@ -270,6 +271,7 @@ def host_import(
             file_type=None if file_type is None else parse_file_type(file_type),
             aux_type=None if aux_type is None else parse_hex(aux_type, 'aux type'),
             overwrite=force,
+            recursive=recursive,
         )
 
 
@@ -280,6 +282,7 @@ def host_export(
         loader: Annotated[Path | None, Option("--loader", "-l", help="Export boot loader to file")] = None,
         typed: Annotated[bool, Option("--typed", "-T",
             help="Add the file type and aux type to host names, like NAME#FF2000")] = False,
+        recursive: Annotated[bool, Option("--recursive", "-r", help="Export directories too")] = False,
         log: LogOpt = None,
     ):
     """
@@ -294,7 +297,7 @@ def host_export(
         if not src:
             raise ProDOSError("Paths required when not using --loader")
         dst = src[0] if len(src) == 1 else src.pop()
-        print_notes(export_files(volume, src, Path(dst), typed=typed))
+        print_notes(export_files(volume, src, Path(dst), typed=typed, recursive=recursive))
 
 
 @app.command()

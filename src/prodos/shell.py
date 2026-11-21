@@ -12,6 +12,7 @@ import glob
 import os
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,8 @@ def _type_options(p: argparse.ArgumentParser):
 
 class Shell(cmd.Cmd):
     intro = "Type help for a list of commands, or help <command>.  exit or ^D to quit."
+    history_file = Path('~/.prodos_history').expanduser()
+    history_length = 1000
 
     def __init__(self, volume: Volume, console: Console | None = None):
         super().__init__()
@@ -78,6 +81,20 @@ class Shell(cmd.Cmd):
             readline.set_completer_delims(' \t\n')
             if 'libedit' in (readline.__doc__ or ''):
                 readline.parse_and_bind('bind ^I rl_complete')
+        if readline and sys.stdin.isatty() and self.history_file.exists():
+            # recall commands from earlier sessions
+            try:
+                readline.read_history_file(self.history_file)
+            except OSError:
+                pass
+
+    def postloop(self):
+        if readline and sys.stdin.isatty():
+            try:
+                readline.set_history_length(self.history_length)
+                readline.write_history_file(self.history_file)
+            except OSError:
+                pass
 
     def cmdloop(self, intro: str | None = None):
         while True:
@@ -243,17 +260,26 @@ class Shell(cmd.Cmd):
 
     def do_put(self, arg: str):
         """
-        put [-t TYPE] [-a AUX] [-f] HOSTFILE... [DST]: copy host file(s) to the volume.
+        put [-r] [-f] [-t TYPE] [-a AUX] HOSTFILE... [DST]: copy host file(s) to the volume.
         With one file it goes in the current directory, otherwise the last argument
         is the destination.  Host globs are expanded, and names like NAME#FF2000 set
-        the file type and aux type.
+        the file type and aux type.  -r copies directories too, and -l FILE writes
+        the boot loader.
         """
         p = _parser('put', "Copy host files to the volume")
         _type_options(p)
         p.add_argument('-f', '--force', action='store_true', help="overwrite existing files")
-        p.add_argument('files', nargs='+')
+        p.add_argument('-r', '--recursive', action='store_true', help="copy directories too")
+        p.add_argument('-l', '--loader', help="write this host file to the boot loader blocks")
+        p.add_argument('files', nargs='*')
         a = p.parse_args(shlex.split(arg))
+        if a.loader:
+            self.volume.write_loader(Path(a.loader).expanduser().read_bytes())
         files: list[str] = a.files
+        if not files:
+            if not a.loader:
+                raise ProDOSError("Usage: put [-r] [-f] [-t TYPE] [-a AUX] HOSTFILE... [DST]")
+            return
         dst = files.pop() if len(files) > 1 else '.'
         hosts = [Path(m) for f in files for m in sorted(glob.glob(os.path.expanduser(f))) or [f]]
         for e in import_files(
@@ -261,22 +287,34 @@ class Shell(cmd.Cmd):
             file_type=None if a.type is None else parse_file_type(a.type),
             aux_type=None if a.aux is None else parse_hex(a.aux, 'aux type'),
             overwrite=a.force,
+            recursive=a.recursive,
         ):
             self.print(Text(repr(e), style=entry_style(e)))
 
     def do_get(self, arg: str):
         """
-        get [-T] PATH... [HOSTDST]: copy file(s) from the volume to the host.
+        get [-r] [-T] PATH... [HOSTDST]: copy file(s) from the volume to the host.
         With one path it goes in the host's current directory, otherwise the last
         argument is the host destination.  With -T host names get a #TTAAAA type suffix.
+        -r copies directories too, and -l FILE saves the boot loader.
         """
         p = _parser('get', "Copy files from the volume to the host")
         p.add_argument('-T', '--typed', action='store_true', help="add #TTAAAA to host names")
-        p.add_argument('paths', nargs='+')
+        p.add_argument('-r', '--recursive', action='store_true', help="copy directories too")
+        p.add_argument('-l', '--loader', help="save the boot loader blocks to this host file")
+        p.add_argument('paths', nargs='*')
         a = p.parse_args(shlex.split(arg))
+        if a.loader:
+            Path(a.loader).expanduser().write_bytes(self.volume.read_loader())
         paths: list[str] = a.paths
+        if not paths:
+            if not a.loader:
+                raise ProDOSError("Usage: get [-r] [-T] PATH... [HOSTDST]")
+            return
         dst = paths.pop() if len(paths) > 1 else '.'
-        for note in export_files(self.volume, self.paths(paths), Path(dst).expanduser(), typed=a.typed):
+        notes = export_files(self.volume, self.paths(paths), Path(dst).expanduser(),
+            typed=a.typed, recursive=a.recursive)
+        for note in notes:
             self.print(note, style='yellow')
 
     # --- host commands
