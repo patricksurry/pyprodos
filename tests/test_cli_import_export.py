@@ -88,8 +88,8 @@ def test_import_target_not_found(vol_with_dir: Path, tmp_path: Path) -> None:
 
     # Parent directory doesn't exist
     result = runner.invoke(app, ["import", str(vol_with_dir), str(dummy_file), "/NODIR/FILE"])
-    assert result.exit_code == 2
-    assert "Target not found" in result.stdout
+    assert result.exit_code == 1
+    assert "not found" in result.stdout
 
 
 def test_import_target_not_directory(vol_with_dir: Path, tmp_path: Path) -> None:
@@ -103,7 +103,7 @@ def test_import_target_not_directory(vol_with_dir: Path, tmp_path: Path) -> None
     file2 = tmp_path / "file2.txt"
     file2.write_text("content2")
     result = runner.invoke(app, ["import", str(vol_with_dir), str(file2), "/FILE/SUBFILE"])
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     assert "not a directory" in result.stdout
 
 
@@ -115,7 +115,7 @@ def test_import_over_directory(vol_with_dir: Path, tmp_path: Path) -> None:
     dummy_file.write_text("content")
 
     result = runner.invoke(app, ["import", str(vol_with_dir), str(dummy_file), "/"])
-    assert result.exit_code == 4
+    assert result.exit_code == 1
     assert "is a directory" in result.stdout
 
 

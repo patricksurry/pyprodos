@@ -69,7 +69,7 @@ def test_import_without_force_fails(tmp_path: Path, vol_with_file: Path):
 
     # Try to import over existing file without force
     result = runner.invoke(app, ["import", str(vol_with_file), str(dummy_file), "/HELLO"])
-    assert result.exit_code == 5
+    assert result.exit_code == 1
     assert "exists" in result.stdout
 
     # Verify original content is unchanged

@@ -129,6 +129,21 @@ def parse_access(s: str) -> int:
     return access_byte(''.join(dict.fromkeys(letters)))
 
 
+def parse_hex(s: str, what: str = 'value') -> int:
+    """An integer from hex like 'FF', '$2000' or '0x2000'"""
+    try:
+        return int(s.removeprefix('$').removeprefix('0x'), 16)
+    except ValueError:
+        raise ProDOSError(f"Invalid {what} {s!r}, expected hex like FF or $2000") from None
+
+
+def parse_file_type(s: str) -> int:
+    """A file type from a name like 'SYS' or hex like 'FF'"""
+    if s.upper() in FileType.__members__:
+        return FileType[s.upper()]
+    return parse_hex(s, 'file type')
+
+
 def access_repr(flags: int) -> str:
     s = ''
     for c, f in _access_flags.items():
@@ -476,7 +491,7 @@ class FileEntry(NamedEntry):
     root: ClassVar['FileEntry']
 
     # match __repr__ layout
-    heading: ClassVar = "File name               EOF T/FT Access Created        Modified      Blocks @ Key"
+    heading: ClassVar = "File name               EOF T/FT  Aux Access Created        Modified      Blocks @ Key"
 
     file_type: int
     key_pointer: int        # key block of the file's storage
@@ -510,7 +525,7 @@ class FileEntry(NamedEntry):
         name = self.file_name
         if self.is_dir:
             name += '/'
-        return f"{name:18s} {self.eof:>8d} {typ} {flags} {self.created} {self.last_mod} {self.blocks_used:>5d} @ {self.key_pointer}"
+        return f"{name:18s} {self.eof:>8d} {typ} {self.aux_type:04X} {flags} {self.created} {self.last_mod} {self.blocks_used:>5d} @ {self.key_pointer}"
 
     @property
     def is_dir(self) -> bool:

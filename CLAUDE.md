@@ -12,8 +12,9 @@ Part of the goal is a clean, comprehensible implementation that explains how Pro
 so keep things simple and keep names consistent with the glossary in metadata.py.
 
 The source files are in src/prodos with a simple
-CLI defined in src/prodos/cli.py.
-The CLI should not implement complex logic, that should remain in the core files.
+CLI defined in src/prodos/cli.py and an interactive shell in src/prodos/shell.py.
+Neither should implement complex logic: both are thin wrappers over the core
+operations in volume.py and host.py, which raise ProDOSError.
 - device.py: BlockDevice reads and writes the blocks defined in blocks.py,
   with an access log to watch how the higher level routines are using the device.
 - bitmap.py: the volume bit map, which owns block allocation.
@@ -22,6 +23,8 @@ The CLI should not implement complex logic, that should remain in the core files
 - directory.py: Directory, a chain of blocks with fixed entry slots that are never compacted.
 - volume.py: Volume ties these together; use it as a context manager so the bit map is flushed.
 - check.py: volume integrity checks.
+- host.py: import/export between host files and a volume, with NAME#TTAAAA type suffixes.
+- listing.py: ls output, styled with rich.
 
 Raise ProDOSError for user-facing failures; use assert only for internal invariants.
 

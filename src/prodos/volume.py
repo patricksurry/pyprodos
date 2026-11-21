@@ -1,6 +1,8 @@
 """A ProDOS volume: boot loader, volume directory, bit map and files."""
 import logging
+import posixpath
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
 from typing import Self
@@ -10,12 +12,24 @@ from .blocks import DirectoryBlock
 from .device import BlockDevice, DeviceFormat, DeviceMode
 from .directory import Directory
 from .errors import ProDOSError
-from .file import File
+from .file import File, legal_name
 from .globals import block_size, entries_per_block, max_volume_blocks, volume_directory_length, volume_key_block
 from .metadata import FileEntry, StorageType, VolumeDirectoryHeader, access_byte, is_legal_name
 from .p8datetime import P8DateTime
 
 loader_blocks = [0, 1]
+
+
+def resolve_path(path: str, cwd: str = '/') -> str:
+    """Absolute ProDOS path for path relative to cwd, e.g. ('../A', '/B/C') -> '/B/A'"""
+    p = posixpath.normpath(posixpath.join(cwd, path.upper()))
+    return '/' + p.lstrip('/')
+
+
+def split_path(path: str) -> tuple[str, str]:
+    """('/A/B', 'C') from '/A/B/C'"""
+    parent, _, name = path.rstrip('/').rpartition('/')
+    return parent or '/', name
 
 
 class Volume:
@@ -170,6 +184,101 @@ class Volume:
         for p in dict.fromkeys(p.strip('/') for p in paths):
             entries += root.glob_path(p.split('/')) if p else [FileEntry.root]
         return entries
+
+    def find_entries(self, paths: list[str]) -> list[FileEntry]:
+        """Like glob_paths, but at least one entry must match"""
+        entries = self.glob_paths(paths)
+        if not entries:
+            raise ProDOSError("No matching files found")
+        return entries
+
+    def read_directory_at(self, key_block: int) -> Directory:
+        return Directory.read(self.device, self.bitmap, key_block)
+
+    def target(self, dst: str, count: int) -> tuple[int, str | None]:
+        """
+        Where cp, mv and import put count items: into dst if it's a directory,
+        otherwise a single item goes into dst's parent with dst's name.
+        Returns the key block of the target directory and the new name, if any.
+        """
+        e = self.path_entry(dst)
+        if e and e.is_dir:
+            return e.key_pointer, None
+        if count > 1:
+            raise ProDOSError(f"Target {dst} is not a directory")
+        parent_key, name = self._parent_of(dst)
+        return parent_key, legal_name(name)
+
+    def _parent_of(self, path: str) -> tuple[int, str]:
+        """Key block of the directory that should contain path, and the last part of path"""
+        parent_path, name = split_path(path)
+        parent = self.path_entry(parent_path)
+        if not parent:
+            raise ProDOSError(f"Parent directory {parent_path} not found")
+        if not parent.is_dir:
+            raise ProDOSError(f"Parent {parent_path} is not a directory")
+        return parent.key_pointer, name
+
+    # --- operations on paths, shared by the command line and the shell
+
+    def copy(self, srcs: list[str], dst: str) -> list[str]:
+        """Copy files to dst, returning notes about anything skipped.  Directories aren't copied."""
+        entries = self.find_entries(srcs)
+        key, name = self.target(dst, len(entries))
+        notes: list[str] = []
+        for e in entries:
+            if e.is_dir:
+                notes.append(f"Omitting directory {e.file_name}")
+            elif not e.is_plain_file:
+                notes.append(f"Omitting extended file {e.file_name}")
+            else:
+                data = self.read_file(e).data
+                self.read_directory_at(key).write_file(replace(e, file_name=name or e.file_name), data, overwrite=True)
+        return notes
+
+    def move(self, srcs: list[str], dst: str):
+        """Move (or rename) files and directories to dst"""
+        entries = self.find_entries(srcs)
+        if any(e.is_volume_dir for e in entries):
+            raise ProDOSError("Cannot move root directory")
+        key, name = self.target(dst, len(entries))
+        for e in entries:
+            self.directory_of(e).move(e, self.read_directory_at(key), name)
+
+    def remove(self, paths: list[str]):
+        """Remove files; use remove_directory for directories"""
+        entries = self.find_entries(paths)
+        for e in entries:
+            if e.is_dir:
+                raise ProDOSError(f"{e.file_name} is a directory")
+        for e in entries:
+            self.directory_of(e).delete(e)
+
+    def make_directory(self, path: str) -> FileEntry:
+        parent_key, name = self._parent_of(path)
+        if not name:
+            raise ProDOSError(f"Invalid directory name {path!r}")
+        return self.read_directory_at(parent_key).make_directory(legal_name(name))
+
+    def remove_directory(self, path: str):
+        """Remove an empty directory"""
+        e = self.path_entry(path)
+        if not e:
+            raise ProDOSError(f"Directory {path} not found")
+        if not e.is_dir:
+            raise ProDOSError(f"{path} is not a directory")
+        if e.is_volume_dir:
+            raise ProDOSError("Cannot remove the volume directory")
+        self.directory_of(e).delete(e)
+
+    def set_info(self, paths: list[str], *,
+            file_type: int | None = None, aux_type: int | None = None, access: int | None = None):
+        """Change the file type, aux type or access of files and directories"""
+        entries = self.find_entries(paths)
+        if any(e.is_volume_dir for e in entries):
+            raise ProDOSError("Can't change info for the volume directory")
+        for e in entries:
+            self.directory_of(e).set_info(e, file_type=file_type, aux_type=aux_type, access=access)
 
     def read_loader(self) -> bytes:
         """The boot loader in blocks 0 and 1"""

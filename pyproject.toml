@@ -25,7 +25,6 @@ dependencies = [
     "bitarray>=3.7.1",
     "rich>=13.0.0",
     "typer>=0.19.2",
-    "typer-di>=0.1.3",
 ]
 
 [project.urls]
@@ -71,10 +70,6 @@ ignore = [
     "E221",     # aligned assignments in tables of constants
     "E241",
 ]
-
-[tool.ruff.lint.flake8-bugbear]
-# typer declares parameters with calls in their defaults
-extend-immutable-calls = ["typer_di.Depends", "typer.Option", "typer.Argument"]
 
 [tool.uv]
 # version is read from VERSION, so rebuild the editable install when it changes

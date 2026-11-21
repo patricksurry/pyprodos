@@ -87,7 +87,7 @@ def test_mkdir_parent_not_found(vol_path: Path) -> None:
     """Test mkdir fails when parent directory doesn't exist"""
     result = runner.invoke(app, ["mkdir", str(vol_path), "/NOPARENT/TEST"])
     assert result.exit_code == 1
-    assert "Parent directory not found" in result.stdout
+    assert "not found" in result.stdout
 
 
 def test_mkdir_parent_not_directory(vol_path: Path, tmp_path: Path) -> None:
@@ -119,4 +119,4 @@ def test_rmdir_not_directory(vol_path: Path, tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["rmdir", str(vol_path), "/FILE"])
     assert result.exit_code == 1
-    assert "Not a directory" in result.stdout
+    assert "not a directory" in result.stdout
