@@ -61,3 +61,13 @@ def test_bad_parent_entry_number(volume: Volume):
     sub.write()
     problems = check_volume(volume)
     assert len(problems) == 1 and "doesn't locate this directory's entry" in problems[0]
+
+
+@pytest.mark.skip_volume_check
+def test_eof_exceeds_capacity(volume: Volume):
+    """Like BUDGE.SYSTEM in images/ProDOS8.2mg: a seedling (one block) claiming 640 bytes"""
+    a = write(volume, "/A", b"x" * 100)
+    root = volume.root
+    root.slots[root.slots.index(a)] = replace(a, eof=640)
+    root.write()
+    assert check_volume(volume) == ["/A: eof 640 exceeds seedling capacity 512"]
