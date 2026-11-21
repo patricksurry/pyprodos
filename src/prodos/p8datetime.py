@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import ClassVar, Self
 
 
-@dataclass(kw_only=True, repr=False)
+@dataclass(kw_only=True, frozen=True, repr=False)
 class P8DateTime:
     """
     Figure B-13. Date and Time Format

@@ -41,7 +41,7 @@ def test_rm_directory_error(vol_with_file: Path) -> None:
     runner.invoke(app, ["mkdir", str(vol_with_file), "/DIR"])
     result = runner.invoke(app, ["rm", str(vol_with_file), "/DIR"])
     assert result.exit_code == 1
-    assert "Not a simple file" in result.stdout
+    assert "is a directory" in result.stdout
 
 
 

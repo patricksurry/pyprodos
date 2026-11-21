@@ -164,7 +164,7 @@ def test_import_tree_file_and_show_map(tmp_path: Path) -> None:
     assert result.exit_code == 0, f"Import failed: {result.stdout}"
 
     print(f"\n*** CliRunner created volume saved to: {vol.absolute()}")
-    print(f"*** Compare with working volume: tree.po")
+    print("*** Compare with working volume: tree.po")
     print(f"*** File size: {source_file.stat().st_size} bytes")
 
     # Verify the file was imported and has tree storage type (type 3)
@@ -232,8 +232,6 @@ def test_import_synthetic_tree_file(tmp_path: Path) -> None:
     print(f"*** Synthetic tree volume saved to: {vol.absolute()}")
 
     # Now run info --map to verify the volume can be walked
-    # If this fails like test_tree_file_walk, the bug is in tree file writing generally
-    # If this passes, the bug is specifically in PlainFile constructor
     result = runner.invoke(app, ["info", "--map", str(vol)])
     if result.exit_code != 0:
         print(f"Exit code: {result.exit_code}")

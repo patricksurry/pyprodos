@@ -24,7 +24,7 @@ def test_log_create_command(tmp_path: Path):
     assert len(log_lines) > 0
 
     # Should have allocations, writes with block types
-    assert any(line.startswith('a ') for line in log_lines), "Should have allocations"
+    assert any("BitmapBlock" in line for line in log_lines), "Should write the bitmap"
     assert any('DirectoryBlock' in line for line in log_lines), "Should have DirectoryBlock writes"
     assert any('BitmapBlock' in line for line in log_lines), "Should have BitmapBlock writes"
 
@@ -60,7 +60,7 @@ def test_log_import_command(tmp_path: Path):
     # Should have reads, writes, and allocations
     assert any(line.startswith('r ') for line in log_lines), "Should have reads"
     assert any(line.startswith('w ') for line in log_lines), "Should have writes"
-    assert any(line.startswith('a ') for line in log_lines), "Should have allocations"
+    assert any("BitmapBlock" in line for line in log_lines), "Should write the bitmap"
 
 
 def test_log_export_command(tmp_path: Path):

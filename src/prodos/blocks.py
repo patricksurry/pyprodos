@@ -1,46 +1,58 @@
+"""The block formats used by ProDOS: directory, index, bit map and extended key blocks."""
 import logging
 import struct
-from dataclasses import dataclass
-from typing import ClassVar, Optional, Self
+from dataclasses import dataclass, field
+from typing import ClassVar, Self
 
 from bitarray import bitarray
 
 from .globals import block_size, entries_per_block, entry_length
 from .metadata import (
-    DirectoryEntry,
-    DirectoryHeaderEntry,
-    ExtendedForkEntry,
+    DirectoryHeader,
     FileEntry,
+    ForkEntry,
     NamedEntry,
     StorageType,
-    SubdirectoryHeaderEntry,
-    VolumeDirectoryHeaderEntry
+    SubdirectoryHeader,
+    VolumeDirectoryHeader,
 )
 
 
 @dataclass(kw_only=True)
 class AbstractBlock:
     def pack(self) -> bytes:
-        return NotImplemented
+        raise NotImplementedError
 
     @classmethod
     def unpack(cls, buf: bytes) -> Self:
-        return NotImplemented
+        raise NotImplementedError
 
 
 @dataclass(kw_only=True)
 class DirectoryBlock(AbstractBlock):
+    """
+    One block of a directory: prev/next pointers linking the chain of blocks,
+    then 13 entries.  In the key (first) block the first entry is the
+    directory header, leaving 12 file entries; other blocks hold 13.
+
+    Entries are numbered from 1 within each block, so in the key block the
+    header is entry 1 and the first file entry is entry 2.
+    """
     SIZE: ClassVar = 4
-    _struct: str = "<HH"
-    _header_factory: ClassVar[dict[StorageType, type[DirectoryHeaderEntry]]] = {
-        StorageType.voldirhdr: VolumeDirectoryHeaderEntry,
-        StorageType.subdirhdr: SubdirectoryHeaderEntry
+    _struct: ClassVar = "<HH"
+    _header_factory: ClassVar[dict[StorageType, type[DirectoryHeader]]] = {
+        StorageType.voldirhdr: VolumeDirectoryHeader,
+        StorageType.subdirhdr: SubdirectoryHeader
     }
 
     prev_pointer: int
     next_pointer: int
-    header_entry: DirectoryHeaderEntry | None = None
-    file_entries: list[FileEntry]
+    header_entry: DirectoryHeader | None = None
+    file_entries: list[FileEntry] = field(default_factory=list[FileEntry])
+
+    def entry_index(self, entry_number: int) -> int:
+        """Index into file_entries for the given (1-based) entry number"""
+        return entry_number - (2 if self.header_entry else 1)
 
     def pack(self) -> bytes:
         data = struct.pack(DirectoryBlock._struct, self.prev_pointer, self.next_pointer)
@@ -61,7 +73,7 @@ class DirectoryBlock(AbstractBlock):
         ) = struct.unpack(cls._struct, buf[:offset])
         # check the start of the first entry to see if it's a header entry
         d = NamedEntry.unpack(buf[offset:offset + NamedEntry.SIZE])
-        header: Optional[DirectoryEntry] = None
+        header: DirectoryHeader | None = None
         header_factory = cls._header_factory.get(d.storage_type)
         if header_factory:
             header = header_factory.unpack(buf[offset:offset + entry_length])
@@ -87,20 +99,21 @@ class DirectoryBlock(AbstractBlock):
 class IndexBlock(AbstractBlock):
     """
     index blocks store up to 256 two byte block pointers,
-    with the LSBs in bytes 0-255 and the MSBs in bytes 256-511
+    with the LSBs in bytes 0-255 and the MSBs in bytes 256-511.
+    A zero pointer marks a sparse (all zero) part of the file.
     """
     block_pointers: list[int]
 
     def pack(self) -> bytes:
         ps = self.block_pointers
         assert len(ps) <= 256, f"IndexBlock.pack: too many pointers {len(ps)}"
-        ps += [0]*(256 - len(ps))
+        ps = ps + [0]*(256 - len(ps))
         return bytes([p & 0xff for p in ps] + [p >> 8 for p in ps])
 
     @classmethod
     def unpack(cls, buf: bytes) -> Self:
         return cls(block_pointers=[
-            lo + (hi<<8) for (lo, hi) in zip(buf[:256], buf[256:])
+            lo + (hi<<8) for (lo, hi) in zip(buf[:256], buf[256:], strict=True)
         ])
 
 
@@ -132,12 +145,11 @@ class ExtendedKeyBlock(AbstractBlock):
     containing the data and resource fork entries at +$000 and +$100
     See https://prodos8.com/docs/technote/25/
     """
-    data_fork: ExtendedForkEntry
-    resource_fork: ExtendedForkEntry
+    data_fork: ForkEntry
+    resource_fork: ForkEntry
 
     def pack(self) -> bytes:
-        pad = 256 - ExtendedForkEntry.SIZE
-        # Pack data fork at offset 0
+        pad = 256 - ForkEntry.SIZE
         data = (
             self.data_fork.pack()
             + bytes(pad)
@@ -151,6 +163,6 @@ class ExtendedKeyBlock(AbstractBlock):
     @classmethod
     def unpack(cls, buf: bytes) -> Self:
         return cls(
-            data_fork=ExtendedForkEntry.unpack(buf),
-            resource_fork=ExtendedForkEntry.unpack(buf[256:])
+            data_fork=ForkEntry.unpack(buf),
+            resource_fork=ForkEntry.unpack(buf[256:])
         )

@@ -1,18 +1,23 @@
 import logging
 import os
 import shutil
+from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import replace
 from os import path
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 from typer import Argument, Option
 from typer_di import Depends, TyperDI
 
+from prodos.check import check_volume
 from prodos.device import DeviceFormat, DeviceMode
-from prodos.file import PlainFile, legal_path
-from prodos.metadata import FileEntry, StorageType
+from prodos.directory import Directory
+from prodos.errors import ProDOSError
+from prodos.file import guess_file_type, legal_name
+from prodos.metadata import FileEntry, parse_access
 from prodos.volmap import format_block_map, format_legend, walk_volume
 from prodos.volume import Volume
 
@@ -51,16 +56,22 @@ def get_host_paths(paths: Annotated[list[str], Argument(help="Host file path(s)"
     return paths
 
 @contextmanager
-def open_volume(source: Path, output: Path|None=None, mode: DeviceMode='ro', log: Path|None=None):
-    if output:
-        shutil.copy(source, output)
-        source = output
-    volume = Volume.from_file(source, mode=mode)
+def open_volume(source: Path, output: Path|None=None, mode: DeviceMode='ro', log: Path|None=None) -> Generator[Volume]:
+    """Open a volume for a command, reporting any ProDOSError as a clean exit"""
     try:
-        yield volume
-    finally:
-        if log:
-            volume.device.write_access_log(log)
+        if output:
+            shutil.copy(source, output)
+            source = output
+        volume = Volume.open(source, mode=mode)
+        try:
+            yield volume
+        finally:
+            volume.close()
+            if log:
+                volume.device.write_access_log(log)
+    except ProDOSError as e:
+        print(f"Error: {e}")
+        raise typer.Exit(1) from None
 
 
 def _split_path(path: str) -> tuple[str, str]:
@@ -68,6 +79,28 @@ def _split_path(path: str) -> tuple[str, str]:
         parent, name = path.rsplit('/', 1)
         return parent or '/', name
     return '/', path
+
+
+def _destination(volume: Volume, dst: str, dst_entry: FileEntry | None, name: str) -> tuple[Directory, str]:
+    """Target directory and name for cp/mv: into dst if it's a directory, else as dst"""
+    if dst_entry and dst_entry.is_dir:
+        return volume.read_directory(dst_entry), name
+    parent_path, new_name = _split_path(dst)
+    parent_entry = volume.path_entry(parent_path)
+    if not parent_entry or not parent_entry.is_dir:
+        print(f"Parent directory {parent_path} not found")
+        raise typer.Exit(1)
+    return volume.read_directory(parent_entry), legal_name(new_name)
+
+
+def _hex(value: str | None, what: str) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value.removeprefix('$').removeprefix('0x'), 16)
+    except ValueError:
+        print(f"Invalid {what} {value!r}, expected hex like FF or $2000")
+        raise typer.Exit(1) from None
 
 
 @app.command()
@@ -82,23 +115,21 @@ def create(
     """
     Create an empty volume with BLOCKS total blocks (512 bytes/block)
     """
-    if path.splitext(dest)[1].upper() == '.' + DeviceFormat.twomg.value.upper():
+    if dest.suffix.lower() == '.' + DeviceFormat.twomg.value:
         format = DeviceFormat.twomg
 
-    if path.exists(dest):
+    if dest.exists():
         if not force:
             print(f"Destination {dest} exists, use --force to override")
             raise typer.Exit(5)
         os.remove(dest)
 
-    volume = Volume.create(
-        dest=dest,
-        volume_name=name,
-        total_blocks=size,
-        format=format,
-        loader_path=None,
-    )
-
+    try:
+        volume = Volume.create(dest=dest, volume_name=name, total_blocks=size, format=format)
+    except ProDOSError as e:
+        print(f"Error: {e}")
+        raise typer.Exit(1) from None
+    volume.close()
     if log:
         volume.device.write_access_log(log)
 
@@ -124,28 +155,21 @@ def info(
 
 
 @app.command()
-def check(source: Path = Depends(get_volume_path),):
+def check(
+        source: Path = Depends(get_volume_path),
+        log: Path|None = Depends(get_log),
+    ):
     """
-    TODO Perform various volume integrity checks
-
-    - validate parent_entry_number and parent_pointer for subdir header
-    - validate header_pointer for file entry
-
-    - check boot blocks, vol dir, block map marked used
-    - volume total blocks matches volume size
-    - recurse all files and directories
-        - check known file type
-        - read every file,
-        - check file blocks used matches visited
-        - check rest of index blocks are zero(?)
-    - warn if read block not marked active
-    - warn if used blocks not accessed
+    Check volume integrity: directory structure, block usage and the bit map
     """
-    print("Not implemented yet")
-
-
-def default_path(paths: Optional[list[str]]) -> list[str]:
-    return paths or ['/']
+    with open_volume(source, log=log) as volume:
+        problems = check_volume(volume)
+    for p in problems:
+        print(p)
+    if problems:
+        print(f"{len(problems)} problem(s) found")
+        raise typer.Exit(1)
+    print("No problems found")
 
 
 @app.command()
@@ -160,11 +184,8 @@ def ls(
 
     Paths are case-insensitive, forward-slash separated (/) and start with a slash.
     """
-    if not paths:
-        paths = ['/']
-
     with open_volume(source, log=log) as volume:
-        entries = volume.glob_paths(paths)
+        entries = volume.glob_paths(paths or ['/'])
 
         if not entries:
             print("No matching files found")
@@ -176,10 +197,10 @@ def ls(
         while entries:
             e = entries.pop(0)
             if e.is_dir:
-                dir = volume.read_directory(e)
-                print(dir)
+                d = volume.read_directory(e)
+                print(d)
                 if recursive:
-                    entries += [e for e in dir.entries if e.is_dir]
+                    entries += [e for e in d.entries if e.is_dir]
             else:
                 print(e)
             print()
@@ -205,9 +226,7 @@ def cp(
             raise typer.Exit(1)
 
         dst_entry = volume.path_entry(dst)
-        is_dst_dir = dst_entry and dst_entry.is_dir
-
-        if len(entries) > 1 and not is_dst_dir:
+        if len(entries) > 1 and not (dst_entry and dst_entry.is_dir):
             print(f"Target {dst} is not a directory")
             raise typer.Exit(1)
 
@@ -215,27 +234,12 @@ def cp(
             if e.is_dir:
                 print(f"Omitting directory {e.file_name}")
                 continue
-
-            if is_dst_dir:
-                assert dst_entry # for typing
-                dest_dir = volume.read_directory(dst_entry)
-                dest_name = e.file_name
-            else:
-                parent_path, name = _split_path(dst)
-                parent_entry = volume.path_entry(parent_path)
-                if not parent_entry or not parent_entry.is_dir:
-                     print(f"Parent directory {parent_path} not found")
-                     raise typer.Exit(1)
-                dest_dir = volume.read_directory(parent_entry)
-                dest_name = legal_path(name)
-
-            f_src = volume.read_simple_file(e)
-            f_dst = PlainFile(
-                device=volume.device,
-                file_name=dest_name,
-                data=f_src.data
-            )
-            dest_dir.add_simple_file(f_dst)
+            f = volume.read_file(e)
+            if f.resource_fork:
+                print(f"Omitting extended file {e.file_name}")
+                continue
+            dest_dir, dest_name = _destination(volume, dst, dst_entry, e.file_name)
+            dest_dir.write_file(replace(e, file_name=dest_name), f.data, overwrite=True)
 
 
 @app.command()
@@ -256,44 +260,18 @@ def mv(
             print("No matching files found")
             raise typer.Exit(1)
 
-        # Check for attempting to move root directory
-        for e in entries:
-            if e.header_pointer == 0:
-                print("Cannot move root directory")
-                raise typer.Exit(1)
+        if any(e.is_volume_dir for e in entries):
+            print("Cannot move root directory")
+            raise typer.Exit(1)
 
         dst_entry = volume.path_entry(dst)
-        is_dst_dir = dst_entry and dst_entry.is_dir
-
-        if len(entries) > 1 and not is_dst_dir:
+        if len(entries) > 1 and not (dst_entry and dst_entry.is_dir):
             print(f"Target {dst} is not a directory")
             raise typer.Exit(1)
 
         for e in entries:
-            if is_dst_dir:
-                assert dst_entry # for typing
-                dest_dir = volume.read_directory(dst_entry)
-                dest_name = e.file_name
-            else:
-                parent_path, name = _split_path(dst)
-                parent_entry = volume.path_entry(parent_path)
-                if not parent_entry or not parent_entry.is_dir:
-                     print(f"Parent directory {parent_path} not found")
-                     raise typer.Exit(1)
-                dest_dir = volume.read_directory(parent_entry)
-                dest_name = legal_path(name)
-
-            src_dir = volume.parent_directory(e)
-
-            # Use the appropriate move method based on file type
-            try:
-                if e.is_dir:
-                    src_dir.move_directory(e, dest_dir, dest_name)
-                else:
-                    src_dir.move_simple_file(e, dest_dir, dest_name)
-            except ValueError as ex:
-                print(str(ex))
-                raise typer.Exit(1)
+            dest_dir, dest_name = _destination(volume, dst, dst_entry, e.file_name)
+            volume.directory_of(e).move(e, dest_dir, dest_name)
 
 
 @app.command()
@@ -304,7 +282,7 @@ def rm(
         log: Path|None = Depends(get_log),
     ):
     """
-    Remove simple file(s) at SRC
+    Remove file(s) at SRC
     """
     with open_volume(source, output, mode='rw', log=log) as volume:
         entries = volume.glob_paths(src)
@@ -313,13 +291,12 @@ def rm(
             raise typer.Exit(1)
 
         for e in entries:
-            if not e.is_plain_file:
-                print(f"Not a simple file: {e.file_name}")
+            if e.is_dir:
+                print(f"Not a file: {e.file_name} is a directory, use rmdir")
                 raise typer.Exit(1)
 
         for e in entries:
-            dir = volume.parent_directory(e)
-            dir.remove_simple_file(e)
+            volume.directory_of(e).delete(e)
 
 
 @app.command()
@@ -350,12 +327,12 @@ def mkdir(
 
         parent_dir = volume.read_directory(parent_entry)
 
-        name = legal_path(name)
-        if parent_dir.file_entry(name):
+        name = legal_name(name)
+        if parent_dir.find(name):
             print(f"Entry already exists: {name}")
             raise typer.Exit(1)
 
-        parent_dir.add_directory(file_name=name)
+        parent_dir.make_directory(name)
 
 
 @app.command()
@@ -378,13 +355,44 @@ def rmdir(
             print(f"Not a directory: {src}")
             raise typer.Exit(1)
 
-        directory = volume.read_directory(entry)
-        if not directory.is_empty:
+        if not volume.read_directory(entry).is_empty:
             print(f"Directory not empty: {src}")
             raise typer.Exit(1)
 
-        parent = volume.parent_directory(entry)
-        parent.remove_directory(entry)
+        volume.directory_of(entry).delete(entry)
+
+
+@app.command()
+def chinfo(
+        source: Path = Depends(get_volume_path),
+        src: list[str] = Depends(get_paths),
+        file_type: Annotated[str | None, Option("--type", "-t", help="New file type in hex, e.g. 04 or FF")] = None,
+        aux_type: Annotated[str | None, Option("--aux", "-a", help="New aux type in hex, e.g. 2000")] = None,
+        access: Annotated[str | None, Option("--access",
+            help="New access flags, e.g. RWBND, from R=read W=write I=invisible B=backup N=rename D=destroy")] = None,
+        output: Path|None = Depends(get_output),
+        log: Path|None = Depends(get_log),
+    ):
+    """
+    Change the file type, aux type or access flags of file(s) at SRC
+    """
+    ftype = _hex(file_type, 'file type')
+    aux = _hex(aux_type, 'aux type')
+    if ftype is None and aux is None and access is None:
+        print("Nothing to change: use --type, --aux or --access")
+        raise typer.Exit(1)
+
+    with open_volume(source, output, mode='rw', log=log) as volume:
+        flags = parse_access(access) if access is not None else None
+        entries = volume.glob_paths(src)
+        if not entries:
+            print("No matching files found")
+            raise typer.Exit(1)
+        for e in entries:
+            if e.is_volume_dir:
+                print("Can't change info for the volume directory")
+                raise typer.Exit(1)
+            volume.directory_of(e).set_info(e, file_type=ftype, aux_type=aux, access=flags)
 
 
 @app.command('import')
@@ -394,6 +402,11 @@ def host_import(
         dst: str | None = Depends(get_optional_path),
         output: Path|None = Depends(get_output),
         loader: Annotated[Path | None, Option("--loader", "-l", help="Import boot loader from file")] = None,
+        file_type: Annotated[str | None, Option("--type", "-t",
+            help="File type in hex, e.g. 04 (TXT), 06 (BIN), FF (SYS); "
+                 "default SYS for PRODOS and *.SYSTEM, otherwise BIN")] = None,
+        aux_type: Annotated[str | None, Option("--aux", "-a",
+            help="Aux type in hex, e.g. 2000 for a BIN load address")] = None,
         force: bool = Depends(get_force),
         log: Path|None = Depends(get_log),
     ):
@@ -404,15 +417,15 @@ def host_import(
     Directories are not imported: use host globbing to expand as file lists.
     Use --loader to import a boot loader to the volume.
     """
+    ftype = _hex(file_type, 'file type')
+    aux = _hex(aux_type, 'aux type') or 0
+
     with open_volume(source, output, mode='rw', log=log) as volume:
-        # Handle loader import
         if loader:
-            volume.write_loader(loader)
+            volume.write_loader(loader.read_bytes())
             if not src:
-                # Only loader import requested
                 return
 
-        # Handle file import
         if not src:
             print("Error: file paths required when not using --loader")
             raise typer.Exit(1)
@@ -440,12 +453,11 @@ def host_import(
             print(f"Target not a directory: {dst}")
             raise typer.Exit(3)
 
-        # Now we have a single entry and possibly a target_name
-        dir = volume.read_directory(target)
+        d = volume.read_directory(target)
 
         for fname in src:
-            name = legal_path(renamed or path.basename(fname))
-            entry = dir.file_entry(name)
+            name = legal_name(renamed or path.basename(fname))
+            entry = d.find(name)
             if entry:
                 if entry.is_dir:
                     print(f"Target {name} is a directory")
@@ -453,21 +465,14 @@ def host_import(
                 elif not force:
                     print(f"Target file {name} exists, use --force to overwrite")
                     raise typer.Exit(5)
-                else:
-                    dir.remove_simple_file(entry)
-            f = PlainFile(
-                device=volume.device,
-                file_name=name,
-                data=open(fname, 'rb').read()
-            )
-            dir.add_simple_file(f)
+            metadata = FileEntry.new(name, file_type=guess_file_type(name) if ftype is None else ftype, aux_type=aux)
+            d.write_file(metadata, Path(fname).read_bytes(), overwrite=force)
 
 
 @app.command('export')
 def host_export(
         source: Path = Depends(get_volume_path),
         src: list[str] = Depends(get_optional_paths),
-        output: Path|None = Depends(get_output),
         loader: Annotated[Path | None, Option("--loader", "-l", help="Export boot loader to file")] = None,
         log: Path|None = Depends(get_log),
     ):
@@ -475,17 +480,12 @@ def host_export(
     Export SRC to host DST, or SRC(s) to host DIRECTORY.
     Use --loader to export the boot loader blocks.
     """
-    with open_volume(source, output, log=log) as volume:
-        # Handle loader export
+    with open_volume(source, log=log) as volume:
         if loader:
-            loader_data = volume.read_loader()
-            with open(loader, 'wb') as f:
-                f.write(loader_data)
+            loader.write_bytes(volume.read_loader())
             if not src:
-                # Only loader export requested
                 return
 
-        # Handle file export
         if not src:
             print("Error: paths required when not using --loader")
             raise typer.Exit(1)
@@ -506,15 +506,11 @@ def host_export(
             if e.is_dir:
                 print(f"Omitting directory {e.file_name}")
                 continue
-
             out = dst if not is_dir else path.join(dst, e.file_name)
-            if e.is_plain_file:
-                volume.read_simple_file(e).export(out)
-            elif e.storage_type == StorageType.extended:
-                volume.read_extended_file(e).export(out)
-            else:
-                print(f"Unsupported file type {e.storage_type:x} for {e.file_name}")
-                continue
+            try:
+                volume.read_file(e).export(out)
+            except ProDOSError as ex:
+                print(f"Skipping {e.file_name}: {ex}")
 
 
 if __name__ == "__main__":
