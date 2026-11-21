@@ -42,12 +42,12 @@ boot disk from https://prodos8.com/.  (There's a copy in `images/` here.)
 the `PRODOS` o/s, `BASIC.SYSTEM` and the boot loader.  `get -T` keeps each
 file's type in its host name, and `-l` saves the loader blocks:
 
-![Exploring the ProDOS 2.4.3 disk in prodos shell](docs/shell-explore.svg)
+![Exploring the ProDOS 2.4.3 disk in prodos shell](https://raw.githubusercontent.com/patricksurry/pyprodos/main/docs/shell-explore.svg)
 
 Now we make a new 140K (280 block) floppy, mount it, and put the files and loader on it.
 After it boots, ProDOS runs the first `.SYSTEM` file it finds:
 
-![Building a boot disk in prodos shell](docs/shell-boot.svg)
+![Building a boot disk in prodos shell](https://raw.githubusercontent.com/patricksurry/pyprodos/main/docs/shell-boot.svg)
 
 Finally, test the image in your favorite emulator.  I used [VirtualII](https://www.virtualii.com/) and popped my volume in the virtual Disk ][ drive.   After a ProDOS splash screen, you see the familiar Basic prompt:
 
